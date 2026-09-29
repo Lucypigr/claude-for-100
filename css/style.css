@@ -347,6 +347,16 @@ table.tbl tr:hover td { background: rgba(141, 107, 51, 0.12); }
 #menubar { border-top: 1px solid var(--gold); box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.6); }
 .pack { background: radial-gradient(ellipse at 50% 0%, rgba(160, 60, 30, 0.45), transparent 70%), linear-gradient(rgba(40, 20, 12, 0.9), rgba(16, 10, 6, 0.95)); border: 1px solid #b08a4a; outline: 1px solid rgba(210, 174, 99, 0.25); outline-offset: 3px; border-radius: 2px; }
 
+/* 存檔紀錄 */
+.hist-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; }
+.hist-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(141, 107, 51, 0.5); border-radius: 2px; font-size: 12.5px; }
+.hist-main { flex: 1; line-height: 1.4; }
+.hist-kind { flex: 0 0 auto; font-size: 11px; padding: 1px 5px; border-radius: 2px; background: #3b2e1d; color: var(--paper2); }
+.hist-kind.k-manual { background: #6d4a12; color: #ffe3a0; } .hist-kind.k-backup { background: #6e2a1a; color: #ffd8c8; }
+#start-hist { text-align: left; margin: 6px 0 10px; color: var(--paper2); }
+#start-hist summary { cursor: pointer; font-family: var(--brush); font-size: 15px; color: var(--gold); }
+#start-hist .hist-list { margin-top: 6px; max-height: 200px; }
+
 /* 手機 */
 @media (max-width: 900px) {
   #resbar .res { min-width: 0; padding-right: 6px; }

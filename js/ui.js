@@ -136,7 +136,7 @@ var UI = (function () {
         const x = hs[s];
         if (!x) return '<div class="mini-hero empty">' + Battle.SLOT_NAME[s] + '</div>';
         const tp = Game.tpl(x);
-        return '<div class="mini-hero" style="background:' + FACTION_COLOR[tp.faction] + '">' + tp.name + '<span class="lv">Lv' + x.lv + ' ' + tp.troop + '</span></div>';
+        return '<div class="mini-hero" style="background-color:' + FACTION_COLOR[tp.faction] + faceStyle(tp) + '">' + tp.name + '<span class="lv">Lv' + x.lv + ' ' + tp.troop + '</span></div>';
       }).join('') + '</div>';
       h += '<div class="bar"><i style="width:' + (cap ? troops / cap * 100 : 0) + '%"></i></div>';
       h += '<div class="tinfo"><span>兵 ' + U.fmt(troops) + '/' + U.fmt(cap) + '</span><span>體力 ' + Math.floor(Game.teamMinSta(user, t)) + '</span></div>';
@@ -516,7 +516,7 @@ var UI = (function () {
       case 'advance': { const r = Game.advanceHero(user, heroSel, +d.f); toast(r.ok ? '進階成功！獲得 10 點屬性點' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'inherit': {
         const h = Game.heroByUid(user, heroSel);
-        if (h && ask('傳承會消耗武將【' + Game.tpl(h).name + '】，並獲得其戰法【' + SKILLS[Game.tpl(h).skill].name + '】。確定嗎？')) {
+        if (h && ask('傳承會消耗武將【' + Game.tpl(h).name + '】，並獲得其戰法【' + SKILLS[Game.tpl(h).inherit].name + '】。確定嗎？')) {
           const r = Game.inheritHero(user, heroSel);
           toast(r.ok ? '獲得戰法【' + SKILLS[r.skill].name + '】' : r.msg, r.ok ? 'good' : 'warn');
           heroSel = 0; refreshPanel();
@@ -543,6 +543,7 @@ var UI = (function () {
       case 'leave': if (ask('確定退出同盟？')) { const r = Game.leaveAlliance(user); toast(r.ok ? '已退出同盟' : r.msg); refreshPanel(); } break;
       case 'cleartarget': { const a = G.alliances[user.alliance]; a.target = -1; a.field = null; a.pave = null; a.phase = ''; refreshPanel(); break; }
       case 'claim': { const q = QUESTS.find(x => x.id === d.q); const r = Game.claimQuest(user, q); toast(r.ok ? '領取獎勵：' + rewardText(q.reward) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
+      case 'cardart': CardArt.set(el.checked); refreshPanel(); hudTeams(); break;
       case 'save': toast(Game.save() ? '已存檔' : '存檔失敗（儲存空間不足）', 'info'); saveMeta(); break;
       case 'restart': if (ask('確定放棄目前進度，重新開始新賽季？')) { Game.clearSave(); location.reload(); } break;
       case 'worldclick': break;
@@ -593,16 +594,27 @@ var UI = (function () {
     lastPanelRefresh = performance.now();
   }
 
+  // 官網卡圖：只有本機版（index.html 引用 js/cardart.js 且在本機執行）才會有網址
+  function artUrl(t, size) {
+    return t && t.icon && typeof CardArt !== 'undefined' && CardArt.on ? CardArt.url(t.icon, size) : '';
+  }
+  // 率土式卡面：左上統御與陣營印、右上兵種、右側直書姓名、下緣星級與等級；外框顏色依星級
   function heroCardHtml(h, opts) {
     opts = opts || {};
     const t = Game.tpl(h);
     const col = FACTION_COLOR[t.faction];
-    const bg = 'background:linear-gradient(160deg,' + col + ' 0%,' + shade(col, -45) + ' 70%,#120c07 100%)';
-    return '<div class="hcard' + (opts.sel ? ' sel' : '') + (opts.cls ? ' ' + opts.cls : '') + '" style="' + bg + '"' + (opts.act ? ' data-act="' + opts.act + '" data-uid="' + h.uid + '"' + (opts.extra || '') : '') + ' title="' + t.name + ' ' + t.faction + t.troop + ' 統御' + t.cost + '">' +
-      '<span class="stars">' + '★'.repeat(t.star) + '</span><span class="tt">' + t.faction + '·' + t.troop + '</span><span class="cost">' + t.cost.toFixed(1) + '</span>' +
-      '<div class="big">' + t.name.slice(0, 1) + '</div>' +
+    const art = artUrl(t, 'medium');
+    const style = '--fc:' + col + ';--fc2:' + shade(col, -55);
+    return '<div class="hcard q' + t.star + (art ? ' has-art' : '') + (opts.sel ? ' sel' : '') + (opts.cls ? ' ' + opts.cls : '') + '" style="' + style + '"' + (opts.act ? ' data-act="' + opts.act + '" data-uid="' + h.uid + '"' + (opts.extra || '') : '') + ' title="' + t.name + '　' + '★'.repeat(t.star) + '　' + t.faction + '・' + t.troop + '兵　統御 ' + t.cost + '">' +
+      '<div class="hc-art"><span class="hc-glyph">' + t.name.slice(0, 1) + '</span>' + (art ? '<img src="' + art + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest(\'.hcard\').classList.remove(\'has-art\');this.remove()">' : '') + '</div>' +
+      '<div class="hc-cost">' + t.cost.toFixed(1) + '</div><div class="hc-fac">' + t.faction + '</div><div class="hc-troop">' + t.troop + '</div>' +
+      '<div class="hc-name">' + t.name + '</div>' +
       (h.team >= 0 && !opts.noTeam ? '<span class="inteam">' + (h.team + 1) + '隊</span>' : '') + (h.adv ? '<span class="adv">' + '◆'.repeat(h.adv) + '</span>' : '') +
-      '<div class="foot"><span>' + t.name + '</span><span>' + h.lv + '</span></div></div>';
+      '<div class="hc-foot"><span class="hc-stars">' + '★'.repeat(t.star) + '</span><span class="hc-lv">Lv.' + h.lv + '</span></div></div>';
+  }
+  function faceStyle(t) {
+    const a = artUrl(t, 'small');
+    return a ? ';background-image:linear-gradient(90deg,rgba(0,0,0,.15),rgba(0,0,0,.72)),url(' + a + ');background-size:cover;background-position:center 20%' : '';
   }
   function shade(hex, amt) {
     const n = parseInt(hex.slice(1), 16);
@@ -870,6 +882,7 @@ var UI = (function () {
       let h = '<div class="sec-t">存檔</div><button class="btn" data-act="save">立即存檔</button> <span class="muted">（每分鐘自動存檔；關閉頁面時天下暫停）</span>';
       h += '<div class="sec-t">遊戲速度</div><div class="muted">1× = 每真實秒過 1 遊戲分鐘。畫面右上可切換 1×/2×/5×/10×/20×。空白鍵暫停。</div>';
       h += '<div class="sec-t">操作</div><div class="muted">拖曳平移地圖・滾輪縮放・點擊土地查看/出征・WASD/方向鍵移動・H 回主城・Esc 關閉視窗</div>';
+      if (typeof CardArt !== 'undefined' && CardArt.available) h += '<div class="sec-t">武將卡圖</div><label class="muted"><input type="checkbox" data-act="cardart"' + (CardArt.on ? ' checked' : '') + '> 顯示官網武將卡圖（本機自用：執行時直接從《率土之濱》官網載入，不存檔、不上傳）</label>';
       h += '<div class="sec-t">其他</div><button class="btn" data-act="open" data-panel="help">新手指南</button> <button class="btn red" data-act="restart">重新開始新賽季</button>';
       return h;
     },
@@ -900,7 +913,7 @@ var UI = (function () {
   };
   function bu(u) {
     const col = FACTION_COLOR[u.faction] || '#6d6177';
-    return '<div class="bu" style="border-top:3px solid ' + col + '"><b>' + E(u.name) + '</b>Lv' + u.lv + ' ' + u.troop + '<br><span class="' + (u.end > 0 ? '' : 'bad') + '">' + u.end + '</span><span class="muted">/' + u.start + '</span></div>';
+    return '<div class="bu" style="border-top:3px solid ' + col + faceStyle(HERO_BY_NAME[u.name]) + '"><b>' + E(u.name) + '</b>Lv' + u.lv + ' ' + u.troop + '<br><span class="' + (u.end > 0 ? '' : 'bad') + '">' + u.end + '</span><span class="muted">/' + u.start + '</span></div>';
   }
 
   function heroDetail() {
@@ -909,7 +922,7 @@ var UI = (function () {
     const t = Game.tpl(h);
     const s = Game.heroStats(user, h);
     const fp = Game.freePoints(h);
-    let o = '<div class="hd-top">' + heroCardHtml(h, { noTeam: true }) + '<div><div class="hd-name">' + t.name + '</div><div class="muted">' + '★'.repeat(t.star) + '　' + t.faction + '・' + t.troop + '兵　統御 ' + t.cost + '　攻擊距離 ' + t.range + '</div>';
+    let o = '<div class="hd-top">' + heroCardHtml(h, { noTeam: true }) + '<div><div class="hd-name">' + t.name + '</div><div class="muted">' + '★'.repeat(t.star) + '　' + t.faction + '・' + t.troop + '兵　統御 ' + t.cost + '　攻擊距離 ' + t.range + '</div>' + (t.icon ? '' : '<div class="muted" style="font-size:11px">非官方武將（本作自訂數值）</div>');
     o += '<div>等級 ' + h.lv + (h.lv < CFG.HERO_MAX_LV ? '　<span class="muted">經驗 ' + Math.floor(h.exp) + '/' + CFG.expNeed(h.lv) + '</span>' : '　<span class="warn">已滿級</span>') + '</div>';
     o += '<div class="bar exp"><i style="width:' + (h.lv >= CFG.HERO_MAX_LV ? 100 : h.exp / CFG.expNeed(h.lv) * 100) + '%"></i></div>';
     o += '<div class="muted" style="margin-top:3px">兵力 ' + h.troops + '/' + Game.heroCap(user, h) + '　體力 ' + Math.floor(Game.getSta(h)) + '/' + CFG.STAMINA_MAX + '</div>';
@@ -918,7 +931,7 @@ var UI = (function () {
     for (const [k, n, g] of [['atk', '攻擊', 'atkG'], ['def', '防禦', 'defG'], ['int', '謀略', 'intG'], ['spd', '速度', 'spdG']]) {
       o += '<div class="attr"><span class="muted">' + n + '</span><span class="v">' + s[k].toFixed(1) + ' <span class="g">(+' + t[g] + '/級' + (h.pts[k] ? '，加點 ' + h.pts[k] : '') + ')</span></span><span>' + (fp > 0 ? '<button class="btn small pbtn" data-act="addpt" data-stat="' + k + '">+1</button> <button class="btn small pbtn" style="width:32px" data-act="addpt" data-stat="' + k + '" data-n="' + fp + '">+' + fp + '</button>' : '') + '</span></div>';
     }
-    o += '<div class="attr"><span class="muted">攻城</span><span class="v">' + s.siege + '</span><span></span></div>';
+    o += '<div class="attr"><span class="muted">攻城</span><span class="v">' + s.siege + ' <span class="g">(+' + (t.siegeG || 0) + '/級)</span></span><span></span></div>';
     if (h.pts.atk + h.pts.def + h.pts.int + h.pts.spd > 0) o += '<button class="btn small dark" data-act="resetpt">重置加點</button>';
     o += '<div class="sec-t">戰法</div>';
     const TY = { active: '主動', passive: '被動', command: '指揮', pursuit: '追擊' };
@@ -941,7 +954,7 @@ var UI = (function () {
     o += '<div class="sec-t">進階・傳承</div>';
     if (dupes.length && h.adv < 5) o += '<button class="btn small gold" data-act="advance" data-f="' + dupes[0].uid + '">進階（消耗同名武將，+10 屬性點）</button> ';
     else o += '<span class="muted" style="font-size:12px">擁有同名武將時可進階。</span> ';
-    if (t.star >= 3 && h.team < 0) o += '<button class="btn small dark" data-act="inherit">傳承戰法【' + SKILLS[t.skill].name + '】</button>';
+    if (t.star >= 3 && h.team < 0) o += '<button class="btn small dark" data-act="inherit">傳承戰法【' + SKILLS[t.inherit].name + '】</button>';
     return o;
   }
 

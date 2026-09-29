@@ -99,7 +99,7 @@ var Game = (function () {
       def: t.def + t.defG * L + h.pts.def + p.b.tiebi * 4,
       int: t.int + t.intG * L + h.pts.int + p.b.junji * 4,
       spd: t.spd + t.spdG * L + h.pts.spd + p.b.jifeng * 4,
-      siege: t.siege, range: t.range,
+      siege: Math.round(t.siege + (t.siegeG || 0) * L), range: t.range,
     };
   }
   function getSta(h) { return Math.min(CFG.STAMINA_MAX, h.sta + (G.time - h.staT) * CFG.STAMINA_REGEN_H / 60); }
@@ -336,7 +336,7 @@ var Game = (function () {
     if (!h) return err('武將不存在');
     if (h.team >= 0) return err('武將在部隊中');
     if (tpl(h).star < 3) return err('三星以上武將才能傳承戰法');
-    const sid = tpl(h).skill;
+    const sid = tpl(h).inherit;
     removeHero(p, h);
     if (!p.lib.includes(sid)) p.lib.push(sid);
     return ok({ skill: sid });
@@ -1138,12 +1138,17 @@ var Game = (function () {
 
   // ================= 存檔 =================
   // 精簡存檔：地形由種子重建，僅存動態資料
-  const SK_IDX = {};
-  SKILLS._list.forEach((s, i) => { SK_IDX[s.id] = i; });
-  const skOf = i => (i === null || i === undefined || i < 0) ? null : SKILLS._list[i].id;
+  // v3 存檔直接保存戰法 id；v2 存檔保存的是舊版戰法索引，經 LEGACY_SKILL_IDS 與 SKILLS._alias 對照
+  let skOf = s => (s && SKILLS[s]) ? s : null;
+  const legacySk = i => {
+    if (i === null || i === undefined || i < 0) return null;
+    const id = LEGACY_SKILL_IDS[i];
+    const to = SKILLS._alias[id] || id;
+    return SKILLS[to] ? to : null;
+  };
   function packHero(h) {
     return [h.uid, h.t, h.lv, Math.round(h.exp), h.troops, Math.round(h.sta * 10) / 10, h.staT, h.pts.atk, h.pts.def, h.pts.int, h.pts.spd, h.adv,
-      h.sk.map(s => s ? SK_IDX[s] : -1), h.team];
+      h.sk.map(s => s || 0), h.team];
   }
   function unpackHero(a) {
     return { uid: a[0], t: a[1], lv: a[2], exp: a[3], troops: a[4], sta: a[5], staT: a[6], pts: { atk: a[7], def: a[8], int: a[9], spd: a[10] }, adv: a[11], sk: a[12].map(skOf), team: a[13] };
@@ -1159,7 +1164,7 @@ var Game = (function () {
     const chat = { world: trimChat(G.chat.world), sys: trimChat(G.chat.sys), ally: {} };
     for (const k in G.chat.ally) chat.ally[k] = trimChat(G.chat.ally[k]);
     const data = {
-      v: 2,
+      v: 3,
       G: Object.assign({}, G, { dirty: [], fx: [], rankCache: null, notices: [], chat, reports: G.reports.slice(0, 60).map((r, k) => k < 20 ? r : Object.assign({}, r, { battles: r.battles.map(b => Object.assign({}, b, { log: [] })) })) }),
       cities,
       owner: U.rle(T.owner),
@@ -1172,14 +1177,15 @@ var Game = (function () {
       delete o.lands; delete o.aiMem; delete o._btp; delete o._btpT;
       o.heroes = p.heroes.map(packHero);
       o.firstCap = U.encodeInts(Object.keys(p.firstCap).map(Number));
-      o.lib = p.lib.map(s => SK_IDX[s]);
+      o.lib = p.lib.slice();
       return o;
     });
     return JSON.stringify(data);
   }
   function deserialize(str) {
     const data = JSON.parse(str);
-    if (data.v !== 2) throw new Error('舊版存檔不相容');
+    if (data.v !== 2 && data.v !== 3) throw new Error('舊版存檔不相容');
+    skOf = data.v === 2 ? legacySk : (s => (s && SKILLS[s]) ? s : null);
     World.generate(data.G.seed, data.G.mapN || CFG.MAP_N);
     T = World.T;
     const N = World.N;
@@ -1204,7 +1210,9 @@ var Game = (function () {
       const fc = {};
       for (const i of U.decodeInts(p.firstCap)) fc[i] = 1;
       p.firstCap = fc;
-      p.lib = p.lib.map(skOf).filter(Boolean);
+      p.lib = p.lib.map(skOf).filter((s, i, a) => s && a.indexOf(s) === i);
+      // 自帶戰法固定為武將模板的戰法（舊存檔的自帶戰法已換成官方戰法）
+      for (const h of p.heroes) { h.sk[0] = tpl(h).skill; for (let k = 1; k < 3; k++) if (h.sk[k] && h.sk.indexOf(h.sk[k]) !== k) h.sk[k] = null; }
     }
     landPos = new Int32Array(N * N).fill(-1);
     for (const p of P) { p.lands = []; }

@@ -30,6 +30,10 @@ var UI = (function () {
         if (meta.name) $('.save-info').textContent = '存檔：' + meta.name + '・' + (meta.clock || '') + '・' + (meta.saved || '');
       } catch (e) { /* */ }
     }
+    fillHist('#start-hist-list');
+    let auto = false;
+    try { auto = sessionStorage.getItem('stzb_autocontinue') === '1'; sessionStorage.removeItem('stzb_autocontinue'); } catch (e) { /* */ }
+    if (auto && Game.hasSave()) setTimeout(continueGame, 0);
     document.addEventListener('click', onClick);
     $('#chatform').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
     bindMap();
@@ -71,6 +75,34 @@ var UI = (function () {
     chatSeen = -1;
     main.started = true;
   }
+  // ================= 存檔紀錄 =================
+  function snapshot(kind) {
+    if (!G || typeof SaveHist === 'undefined') return Promise.resolve(null);
+    try {
+      return SaveHist.add({ name: user.name, clock: U.fmtClock(G.time), day: Game.day() + 1, kind }, Game.serialize()).catch(e => { console.warn('snapshot failed', e); return null; });
+    } catch (e) { return Promise.resolve(null); }
+  }
+  function fillHist(sel) {
+    const box = $(sel);
+    if (!box) return;
+    if (typeof SaveHist === 'undefined') { box.textContent = '此環境不支援存檔紀錄'; return; }
+    SaveHist.list().then(list => {
+      const wrap = box.closest('#start-hist');
+      if (wrap) wrap.classList.toggle('hidden', !list.length);
+      box.innerHTML = list.length ? list.map(x => '<div class="hist-row"><span class="hist-kind k-' + x.kind + '">' + (SaveHist.KIND_NAME[x.kind] || x.kind) + '</span><span class="hist-main"><b>' + E(x.name) + '</b>　' + E(x.clock) + '<br><span class="muted">' + new Date(x.at).toLocaleString() + '　' + Math.round(x.size / 1024) + ' KB</span></span>' +
+        '<button class="btn small gold" data-act="histload" data-id="' + x.id + '">讀取</button> <button class="btn small dark" data-act="histdel" data-id="' + x.id + '">刪除</button></div>').join('') : '<div class="muted">尚無存檔紀錄。手動存檔、每過一個遊戲日、重開賽季前都會自動保留一份。</div>';
+    }).catch(() => { box.textContent = '此瀏覽器無法使用存檔紀錄（IndexedDB 被停用）'; });
+  }
+  function loadHist(id) {
+    SaveHist.get(id).then(str => {
+      if (!str) { toast('找不到這份存檔', 'bad'); return; }
+      try { localStorage.setItem('stzb_save', str); } catch (e) { toast('儲存空間不足，無法讀取', 'bad'); return; }
+      try { localStorage.removeItem('stzb_meta'); sessionStorage.setItem('stzb_autocontinue', '1'); } catch (e) { /* */ }
+      main.started = false; // 避免離開頁面時把目前進度蓋回去
+      location.reload();
+    }).catch(() => toast('讀取存檔紀錄失敗', 'bad'));
+  }
+
   function saveMeta() {
     try { localStorage.setItem('stzb_meta', JSON.stringify({ name: user.name, clock: U.fmtClock(G.time), saved: new Date().toLocaleString() })); } catch (e) { /* */ }
   }
@@ -544,10 +576,12 @@ var UI = (function () {
       case 'cleartarget': { const a = G.alliances[user.alliance]; a.target = -1; a.field = null; a.pave = null; a.phase = ''; refreshPanel(); break; }
       case 'claim': { const q = QUESTS.find(x => x.id === d.q); const r = Game.claimQuest(user, q); toast(r.ok ? '領取獎勵：' + rewardText(q.reward) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'cardart': CardArt.set(el.checked); refreshPanel(); hudTeams(); break;
-      case 'save': toast(Game.save() ? '已存檔' : '存檔失敗（儲存空間不足）', 'info'); saveMeta(); break;
-      case 'restart': if (ask('確定放棄目前進度，重新開始新賽季？')) { Game.clearSave(); location.reload(); } break;
+      case 'save': { const ok = Game.save(); saveMeta(); snapshot('manual').then(id => { toast(ok ? '已存檔' + (id ? '，並加入存檔紀錄' : '') : '存檔失敗（儲存空間不足）', ok ? 'good' : 'bad'); refreshPanel(true); }); break; }
+      case 'histload': if (ask('讀取這份存檔紀錄？目前進度會先自動備份。')) { const id = +d.id; (main.started ? snapshot('backup') : Promise.resolve()).then(() => loadHist(id)); } break;
+      case 'histdel': if (ask('刪除這份存檔紀錄？')) SaveHist.remove(+d.id).then(() => { fillHist('#save-hist'); fillHist('#start-hist-list'); }); break;
+      case 'restart': if (ask('確定放棄目前進度，重新開始新賽季？（目前進度會保留在存檔紀錄）')) snapshot('backup').then(() => { main.started = false; Game.clearSave(); location.reload(); }); break;
       case 'worldclick': break;
-      case 'newseason': Game.clearSave(); location.reload(); break;
+      case 'newseason': snapshot('backup').then(() => { main.started = false; Game.clearSave(); location.reload(); }); break;
     }
   }
   function rewardText(r) {
@@ -577,6 +611,7 @@ var UI = (function () {
     body.innerHTML = f ? f() : '';
     body.querySelectorAll('[data-keep]').forEach(el => { if (scrollers[el.dataset.keep] !== undefined) el.scrollTop = scrollers[el.dataset.keep]; });
     if (soft) body.scrollTop = st;
+    if (panel === 'settings') fillHist('#save-hist');
     if (panel === 'world') {
       const cv = $('#bigworld');
       if (cv) {
@@ -880,9 +915,10 @@ var UI = (function () {
 
     settings() {
       let h = '<div class="sec-t">存檔</div><button class="btn" data-act="save">立即存檔</button> <span class="muted">（每分鐘自動存檔；關閉頁面時天下暫停）</span>';
+      h += '<div class="sec-t">存檔紀錄</div><div class="muted" style="font-size:12px;margin-bottom:4px">保留手動存檔（20 份）、每個遊戲日的自動備份（10 份）與重開賽季前的備份（5 份），可讀回任一份。</div><div id="save-hist" class="hist-list">讀取中…</div>';
       h += '<div class="sec-t">遊戲速度</div><div class="muted">1× = 每真實秒過 1 遊戲分鐘。畫面右上可切換 1×/2×/5×/10×/20×。空白鍵暫停。</div>';
       h += '<div class="sec-t">操作</div><div class="muted">拖曳平移地圖・滾輪縮放・點擊土地查看/出征・WASD/方向鍵移動・H 回主城・Esc 關閉視窗</div>';
-      if (typeof CardArt !== 'undefined' && CardArt.available) h += '<div class="sec-t">武將卡圖</div><label class="muted"><input type="checkbox" data-act="cardart"' + (CardArt.on ? ' checked' : '') + '> 顯示官網武將卡圖（本機自用：執行時直接從《率土之濱》官網載入，不存檔、不上傳）</label>';
+      if (typeof CardArt !== 'undefined') h += '<div class="sec-t">武將卡圖</div><label class="muted"><input type="checkbox" data-act="cardart"' + (CardArt.on ? ' checked' : '') + '> 顯示官網武將卡圖（執行時直接從《率土之濱》官網載入，只在這個瀏覽器生效，不存檔、不上傳）</label>';
       h += '<div class="sec-t">其他</div><button class="btn" data-act="open" data-panel="help">新手指南</button> <button class="btn red" data-act="restart">重新開始新賽季</button>';
       return h;
     },
@@ -958,5 +994,5 @@ var UI = (function () {
     return o;
   }
 
-  return { init, update, toast, openPanel, closeModal, saveMeta, get user() { return user; } };
+  return { init, update, toast, openPanel, closeModal, saveMeta, snapshot, get user() { return user; } };
 })();

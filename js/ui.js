@@ -4,6 +4,8 @@
 var UI = (function () {
   const $ = s => document.querySelector(s);
   const E = U.esc;
+  // 內嵌頁面中 confirm() 會被封鎖，此時直接視為確定
+  const ask = m => (window.self !== window.top) || window.confirm(m);
   let G = null, user = null;
   let chatTab = 'world', chatSeen = -1, chatTabSeen = '';
   let panel = null, panelArg = null, panelTab = null, lastPanelRefresh = 0;
@@ -477,7 +479,7 @@ var UI = (function () {
         else toast(r.msg, 'warn');
         break;
       }
-      case 'abandon': if (confirm('確定放棄這塊土地？')) { const r = Game.abandon(user, tileSel); toast(r.ok ? '已放棄土地' : r.msg, r.ok ? 'info' : 'warn'); renderTilePop(); } break;
+      case 'abandon': if (ask('確定放棄這塊土地？')) { const r = Game.abandon(user, tileSel); toast(r.ok ? '已放棄土地' : r.msg, r.ok ? 'info' : 'warn'); renderTilePop(); } break;
       case 'fort': { const r = Game.buildFort(user, tileSel); toast(r.ok ? '開始建造要塞（60 分鐘）' : r.msg, r.ok ? 'good' : 'warn'); renderTilePop(); break; }
       case 'settarget': {
         const a = G.alliances[user.alliance];
@@ -514,7 +516,7 @@ var UI = (function () {
       case 'advance': { const r = Game.advanceHero(user, heroSel, +d.f); toast(r.ok ? '進階成功！獲得 10 點屬性點' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'inherit': {
         const h = Game.heroByUid(user, heroSel);
-        if (h && confirm('傳承會消耗武將【' + Game.tpl(h).name + '】，並獲得其戰法【' + SKILLS[Game.tpl(h).skill].name + '】。確定嗎？')) {
+        if (h && ask('傳承會消耗武將【' + Game.tpl(h).name + '】，並獲得其戰法【' + SKILLS[Game.tpl(h).skill].name + '】。確定嗎？')) {
           const r = Game.inheritHero(user, heroSel);
           toast(r.ok ? '獲得戰法【' + SKILLS[r.skill].name + '】' : r.msg, r.ok ? 'good' : 'warn');
           heroSel = 0; refreshPanel();
@@ -538,11 +540,11 @@ var UI = (function () {
         const r = Game.createAlliance(user, (name || '').trim());
         toast(r.ok ? '同盟〔' + name + '〕創建成功！' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break;
       }
-      case 'leave': if (confirm('確定退出同盟？')) { const r = Game.leaveAlliance(user); toast(r.ok ? '已退出同盟' : r.msg); refreshPanel(); } break;
+      case 'leave': if (ask('確定退出同盟？')) { const r = Game.leaveAlliance(user); toast(r.ok ? '已退出同盟' : r.msg); refreshPanel(); } break;
       case 'cleartarget': { const a = G.alliances[user.alliance]; a.target = -1; a.field = null; a.pave = null; a.phase = ''; refreshPanel(); break; }
       case 'claim': { const q = QUESTS.find(x => x.id === d.q); const r = Game.claimQuest(user, q); toast(r.ok ? '領取獎勵：' + rewardText(q.reward) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'save': toast(Game.save() ? '已存檔' : '存檔失敗（儲存空間不足）', 'info'); saveMeta(); break;
-      case 'restart': if (confirm('確定放棄目前進度，重新開始新賽季？')) { Game.clearSave(); location.reload(); } break;
+      case 'restart': if (ask('確定放棄目前進度，重新開始新賽季？')) { Game.clearSave(); location.reload(); } break;
       case 'worldclick': break;
       case 'newseason': Game.clearSave(); location.reload(); break;
     }

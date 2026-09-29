@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""依《率土之濱》官網武將庫同步武將與戰法數值。
+"""依《率土之濱》官方武將庫同步武將與戰法數值（以台服為準，台服沒有的武將/戰法再用網易官網補）。
 
 產生：
   js/data/heroes.js   武將名單（保留本作名單與順序，官方有收錄者改用官方數值）
   js/data/skills.js   只改寫 // <official> … // </official> 之間的官方戰法區塊
 
-資料來源（官網武將庫 https://stzb.163.com/card_list.html 使用的設定檔）：
-  hero_extra.json   武將：陣營、星級、統御、兵種、攻擊距離、四維與成長、攻城、自帶/傳承戰法、卡圖 iconId
-  skill_extra.json  戰法：類型、發動機率、品質、兵種限制、有效距離、滿級描述
+資料來源：
+  台服（遊戲橘子）武將圖鑑 https://stzb.gamedreamer.com.tw/plate.html 與戰法圖鑑 skill.html 使用的
+    js/wjzl.js   武將：陣營、星級、統御、兵種、攻擊距離、四維與成長、攻城、自帶/可拆解戰法
+    js/jzzl.js   戰法：類型、發動機率、品質、兵種限制、有效距離、說明（滿級 ** 一級）
+  網易官網武將庫 https://stzb.163.com/card_list.html 使用的（簡體，轉為台灣繁體）
+    hero_extra.json / skill_extra.json
 
-卡圖不會被下載，只記錄 iconId，由本機版在瀏覽器執行時直接向官網載入（見 js/cardart.js）。
+卡圖不會被下載，只記錄來源與編號（tw:100451 / cn:100451），由本機版在瀏覽器執行時直接載入（見 js/cardart.js）。
 
 用法：
   pip install opencc-python-reimplemented
   python3 tools/sync_official.py            # 從官網抓最新資料
-  python3 tools/sync_official.py --cache D  # 使用 D/hero_extra.json、D/skill_extra.json（不存在時才下載並存入 D）
+  python3 tools/sync_official.py --cache D  # 使用 D 目錄內的快取檔（不存在時才下載並存入 D）
 """
 import argparse
 import json
@@ -25,8 +28,14 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CFG_URL = 'https://g0.gph.netease.com/ngsocial/community/stzb/cfg/'
-FILES = {'hero': 'hero_extra.json', 'skill': 'skill_extra.json'}
+CN_URL = 'https://g0.gph.netease.com/ngsocial/community/stzb/cfg/'
+TW_URL = 'https://stzb.gamedreamer.com.tw/js/'
+SOURCES = {
+    'cn_hero': (CN_URL + 'hero_extra.json?gameid=g10', 'hero_extra.json', None),
+    'cn_skill': (CN_URL + 'skill_extra.json?gameid=g10', 'skill_extra.json', None),
+    'tw_hero': (TW_URL + 'wjzl.js', 'wjzl.js', 'wjzl'),
+    'tw_skill': (TW_URL + 'jzzl.js', 'jzzl.js', 'jzzl'),
+}
 
 # ---------------------------------------------------------------------------
 # 本作武將名單（舊版手調數值；官方查無此將時沿用）
@@ -144,29 +153,73 @@ NAME_ALIAS = {'淩統': '凌统', '朱儁': '朱儁', '祝融': '祝融夫人', 
 # 本作只有五個陣營；官方的晉陣營武將不選用
 FACTIONS = {'汉': '漢', '魏': '魏', '蜀': '蜀', '吴': '吳', '群': '群'}
 TROOPS = {'骑': '騎', '步': '步', '弓': '弓'}
-QUALITY_STAR = {'4-SR': 5, '3-R': 4, '2-UC': 3}
+QUALITY_STAR = {'4-SR': 5, '3-R': 4, '2-UC': 3, '1-C': 2}
 SKILL_TYPE = {'主动': 'active', '被动': 'passive', '指挥': 'command', '追击': 'pursuit'}
 
 
 # ---------------------------------------------------------------------------
-def fetch(name, cache):
+def parse_js_array(text, var):
+    """台服資料是 `var wjzl=[...]` 形式的 JS，前有 /* */ 欄位說明、後有 // 註解掉的舊資料。"""
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+    text = '\n'.join(l for l in text.split('\n') if not l.lstrip().startswith('//'))
+    m = re.search(r'var\s+' + var + r'\s*=\s*', text)
+    body = text[m.end():]
+    body = body[body.index('['):body.rindex(']') + 1]
+    try:
+        return json.loads(body)
+    except ValueError:
+        return json.loads(re.sub(r',\s*([\]}])', r'\1', body))
+
+
+def fetch(key, cache):
+    url, name, var = SOURCES[key]
     path = os.path.join(cache, name) if cache else None
     if path and os.path.exists(path):
         with open(path, encoding='utf-8') as f:
-            return json.load(f)
-    url = CFG_URL + name + '?gameid=g10'
+            raw = f.read()
+        return parse_js_array(raw, var) if var else json.loads(raw)
     ca = os.environ.get('SSL_CERT_FILE') or os.environ.get('REQUESTS_CA_BUNDLE')
     if not ca and os.path.exists('/root/.ccr/ca-bundle.crt'):
         ca = '/root/.ccr/ca-bundle.crt'
     ctx = ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://stzb.163.com/card_list.html'})
+    ref = 'https://stzb.gamedreamer.com.tw/plate.html' if var else 'https://stzb.163.com/card_list.html'
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0', 'Referer': ref})
     with urllib.request.urlopen(req, context=ctx, timeout=60) as r:
         raw = r.read().decode('utf-8')
     if path:
         os.makedirs(cache, exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
             f.write(raw)
-    return json.loads(raw)
+    return parse_js_array(raw, var) if var else json.loads(raw)
+
+
+def strip_level_range(desc):
+    """台服說明寫成「傷害率190.0% ** 84.4%」（滿級 ** 一級），只保留滿級數值。"""
+    return re.sub(r'\s*\*\*\s*[\d.]+%?', '', desc or '')
+
+
+def tw_hero(h, t2s):
+    """台服武將轉成與網易 hero_extra 相同的欄位（陣營/兵種轉簡體以共用對照表）。"""
+    o = dict(h)
+    o['country'] = t2s.convert(h['contory'])
+    o['type'] = t2s.convert(h['type'])
+    o['key'] = t2s.convert(h['name'])
+    o['disp'] = h['uniqueName']
+    o['icon'] = 'tw:%d' % h['id']
+    o['src'] = '台服'
+    return o
+
+
+def tw_skill(k, t2s):
+    """台服戰法：解析用簡體文字（與網易共用解析規則），顯示用台服原文。"""
+    desc = strip_level_range(k.get('desc'))
+    return {
+        'id': k['id'], 'name': t2s.convert(k['name']), 'type': t2s.convert(k.get('type') or ''),
+        'probability': k.get('probability') or '--', 'zfQuality': k.get('zfQuality') or 'B',
+        'soldierType': t2s.convert(k.get('soldierType') or '弓步骑'), 'targetType': t2s.convert(k.get('targetType') or ''),
+        'distance': k.get('distance'), 'desc': t2s.convert(desc).replace('(', '（').replace(')', '）'),
+        '_disp_name': k['name'], '_disp_desc': desc,
+    }
 
 
 def make_cc():
@@ -216,7 +269,7 @@ def tgt_in(clause, target_type):
     """回傳子句中最先出現的目標代號。"""
     pats = [
         ('敌军全体', 'eAll'), ('敌军群体', 'eG'), ('敌军单体', 'e1'), ('攻击目标', 'e1'), ('命中目标', 'e1'), ('伤害来源', 'e1'), ('敌军大营', 'e1'), ('敌军前锋', 'e1'),
-        ('敌军兵力最', 'e1'), ('敌军防御最', 'e1'), ('敌军谋略最', 'e1'), ('敌军攻击最', 'e1'), ('敌方兵力最多单体', 'e1'),
+        ('敌军兵力最', 'e1'), ('敌军目标', 'e2'), ('友军目标', 'a2'), ('敌军防御最', 'e1'), ('敌军谋略最', 'e1'), ('敌军攻击最', 'e1'), ('敌方兵力最多单体', 'e1'),
         ('我军全体', 'aAll'), ('友军全体', 'aAll'), ('我军群体', 'aG'), ('友军群体', 'aG'),
         ('损失兵力最多', 'aLow'), ('兵力最低', 'aLow'), ('我军单体', 'a1'), ('友军单体', 'a1'), ('我军大营', 'a1'), ('我军前锋', 'a1'),
         ('自身', 'self'), ('自己', 'self'),
@@ -254,7 +307,7 @@ def default_tgt(target_type, stype):
 
 
 def num(s):
-    v = float(s)
+    v = round(float(s), 2)
     return int(v) if v == int(v) else round(v, 1)
 
 
@@ -298,6 +351,7 @@ MANUAL = {
     '百战无怯': {'fx': [_st('dmgTaken', 'self', 99, v=-0.2)], 'rfx': [{'k': 'heal', 'rate': 2.0, 'tgt': 'self'}], 'rr': 3},
     '宣威再战': [{'k': 'dmg', 't': 'phys', 'rate': 1.5, 'tgt': 'e1'}, {'k': 'dmg', 't': 'phys', 'rate': 0.75, 'tgt': 'e1'}],
     '将出关西': [{'k': 'dmg', 't': 'phys', 'rate': 2.5, 'tgt': 'e1'}, {'k': 'dmg', 't': 'phys', 'rate': 1.5, 'tgt': 'e1'}, {'k': 'dmg', 't': 'phys', 'rate': 0.9, 'tgt': 'e1'}],
+    '擅兵不寡': {'rfx': [{'k': 'heal', 'rate': 2.7, 'tgt': 'self'}]},
     '万军取首': [{'k': 'dmg', 't': 'phys', 'rate': 1.6, 'tgt': 'e1'}, {'k': 'dmg', 't': 'phys', 'rate': 0.8, 'tgt': 'e1'}],
 }
 
@@ -373,7 +427,7 @@ def parse_skill(raw, cc_s2t):
                 handled = True
             # 持續傷害（燃燒、恐慌、妖術…）
             m = re.search(r'（伤害率([\d.]+)%', cl)
-            if m and not handled and any(w in ctx for w in DOT) and ('状态' in ctx or '损失' in cl or '诅咒' in ctx) and not re.search(r'(发动|造成)[^（]*?(攻击|猛攻|猛击|火攻|水攻)', cl[:m.start()]):
+            if m and not handled and any(w in ctx for w in DOT) and ('状态' in ctx or '损失' in cl or '诅咒' in ctx or '引发' in cl) and not re.search(r'(发动|造成)[^（]*?(攻击|猛攻|猛击|火攻|水攻)', cl[:m.start()]):
                 st = 'burn' if ('燃烧' in ctx or '灼烧' in ctx) else 'fear'
                 rec = {'k': 'st', 'st': st, 'v': round(float(m.group(1)) / 100, 2), 'tgt': tgt, 'dur': 99 if dur == 99 else max(1, dur)}
                 if prob and prob < 1:
@@ -407,7 +461,7 @@ def parse_skill(raw, cc_s2t):
                     out.append({'k': 'heal', 'rate': rate, 'tgt': ht})
                 handled = True
             # 屬性增減
-            for m in re.finditer(r'((?:攻击|防御|谋略|速度)(?:属性)?(?:[、和与及](?:攻击|防御|谋略|速度)(?:属性)?)*属性|全属性)(提高|提升|增加|降低|下降|减少)([\d.]+)(%?)', cl):
+            for m in re.finditer(r'((?:攻击|防御|谋略|速度)(?:属性)?(?:[、和与及](?:攻击|防御|谋略|速度)(?:属性)?)*属性|全属性)(?:全部)?(提高|提升|增加|降低|下降|减少)([\d.]+)(%?)', cl):
                 stats = list(STAT.values()) if m.group(1) == '全属性' else [STAT[s] for s in re.findall('攻击|防御|谋略|速度', m.group(1))]
                 sign = 1 if m.group(2) in ('提高', '提升', '增加') else -1
                 val = float(m.group(3))
@@ -454,7 +508,10 @@ def parse_skill(raw, cc_s2t):
             if re.search('两次普通攻击|连击', cl):
                 fx.append({'k': 'st', 'st': 'double', 'v': prob if prob else 1, 'tgt': 'self' if is_enemy else tgt, 'dur': dur})
                 handled = True
-            if re.search('挑衅|嘲讽', cl) and not immune and (is_enemy or '攻击自身' in cl):
+            if '援护' in cl and not immune:
+                fx.append({'k': 'st', 'st': 'taunt', 'tgt': 'self', 'dur': dur})
+                handled = True
+            elif re.search('挑衅|嘲讽', cl) and not immune and (is_enemy or '攻击自身' in cl):
                 fx.append({'k': 'st', 'st': 'taunt', 'tgt': 'self', 'dur': dur})
                 handled = True
             if not immune:
@@ -470,6 +527,16 @@ def parse_skill(raw, cc_s2t):
                         fx.append(rec)
                         handled = True
 
+    # 同一狀態對同一目標只保留第一次（例：「陷入怯戰狀態，無法進行普通攻擊」）
+    seen_st, dd = set(), []
+    for f in fx:
+        if f['k'] == 'st':
+            key = (f['st'], f['tgt'])
+            if key in seen_st:
+                continue
+            seen_st.add(key)
+        dd.append(f)
+    fx = dd
     # 追擊戰法的目標就是普攻目標
     if stype == 'pursuit':
         for f in fx:
@@ -503,7 +570,7 @@ def parse_skill(raw, cc_s2t):
     rng = raw.get('distance')
     q = raw.get('zfQuality', 'B') or 'B'
     s = {
-        'id': 'o' + str(raw['id']), 'name': cc_s2t.convert(raw['name']), 'type': stype, 'q': q,
+        'id': 'o' + str(raw['id']), 'name': raw.get('_disp_name') or cc_s2t.convert(raw['name']), 'type': stype, 'q': q,
     }
     if chance is not None and stype in ('active', 'pursuit'):
         s['chance'] = round(chance, 2)
@@ -520,7 +587,7 @@ def parse_skill(raw, cc_s2t):
             s['rp'] = rprob
     if troops:
         s['troops'] = troops
-    s['desc'] = cc_s2t.convert(first_variant(raw['desc']))
+    s['desc'] = first_variant(raw['_disp_desc']) if raw.get('_disp_desc') else cc_s2t.convert(first_variant(raw['desc']))
     return s, approx
 
 
@@ -571,15 +638,22 @@ def main():
     ap.add_argument('--report', action='store_true', help='列出所有解析結果')
     a = ap.parse_args()
     cc_s2t, cc_t2s = make_cc()
-    heroes = fetch(FILES['hero'], a.cache)
-    skills = fetch(FILES['skill'], a.cache)
-    skill_by_id = {s['id']: s for s in skills}
-    skill_by_name = {}
-    for s in skills:
+    cn_heroes = fetch('cn_hero', a.cache)
+    for h in cn_heroes:
+        h['key'], h['disp'], h['icon'], h['src'] = h['name'], cc_s2t.convert(h['uniqueName']), 'cn:%d' % int(h['iconId']), '網易'
+    tw_heroes = [tw_hero(h, cc_t2s) for h in fetch('tw_hero', a.cache)]
+    cn_skills = fetch('cn_skill', a.cache)
+    tw_skills = [tw_skill(k, cc_t2s) for k in fetch('tw_skill', a.cache)]
+    # 以台服為準：同編號戰法、同名武將先用台服，台服沒有才用網易
+    skill_by_id, skill_by_name = {}, {}
+    for s in tw_skills + cn_skills:
+        skill_by_id.setdefault(s['id'], s)
         skill_by_name.setdefault(s['name'], s)
-    by_name = {}
-    for h in heroes:
-        by_name.setdefault(h['name'], []).append(h)
+    tw_by_name, cn_by_name = {}, {}
+    for h in tw_heroes:
+        tw_by_name.setdefault(h['key'], []).append(h)
+    for h in cn_heroes:
+        cn_by_name.setdefault(h['key'], []).append(h)
 
     rows, used, alias, report = [], {}, {}, []
     for r in BASE:
@@ -587,7 +661,7 @@ def main():
         name_s = NAME_ALIAS.get(name)
         if name_s is None:
             name_s = cc_t2s.convert(name)
-        o = pick_official(name_s, faction, troop, by_name) if name_s else None
+        o = (pick_official(name_s, faction, troop, tw_by_name) or pick_official(name_s, faction, troop, cn_by_name)) if name_s else None
         if not o:
             # 非官方武將：沿用本作數值，攻城改為「基礎 + 成長」
             rows.append([name, faction, star, cost, troop, rng, atk, atkG, df, defG, it, intG, spd, spdG,
@@ -596,6 +670,7 @@ def main():
             continue
         sid = o.get('methodId')
         iid = o.get('methodId1') or sid
+        sid, iid = (int(x) if x else None for x in (sid, iid))
         for x in (sid, iid):
             if x in skill_by_id and x not in used:
                 used[x] = parse_skill(skill_by_id[x], cc_s2t)
@@ -606,10 +681,10 @@ def main():
         rows.append([
             name, FACTIONS[o['country']], QUALITY_STAR[o['quality']], float(o['cost']), TROOPS[o['type']], int(o['distance']),
             num(o['attack']), num(o['attGrow']), num(o['def']), num(o['defGrow']), num(o['ruse']), num(o['ruseGrow']),
-            num(o['speed']), num(o['speedGrow']), num(o['siege']), num(o['siegeGrow']), self_id, inh_id, int(o['iconId']),
+            num(o['speed']), num(o['speedGrow']), num(o['siege']), num(o['siegeGrow']), self_id, inh_id, o['icon'],
         ])
-        report.append('  %-6s ← %s（%s）自帶【%s】傳承【%s】' % (name, cc_s2t.convert(o['uniqueName']), o['quality'],
-                                                     cc_s2t.convert(o.get('methodName', '')), cc_s2t.convert(o.get('methodName1', ''))))
+        report.append('  %-6s ← [%s] %s（%s）自帶【%s】傳承【%s】' % (name, o['src'], o['disp'], o['quality'],
+                                                          used[sid][0]['name'] if sid in used else '-', used[iid][0]['name'] if iid in used else '-'))
 
     # 通用戰法：官方有同名戰法者改用官方數值（保留 id，讓 BASIC_SKILLS 與存檔可用）
     GENERIC = {'tuji': '突击', 'chongfeng': '冲锋', 'huogong': '火攻', 'luanji': '乱击', 'jijiu': '急救', 'jianshou': '坚守',
@@ -628,9 +703,9 @@ def main():
     alias = {k: v for k, v in alias.items() if k not in GENERIC}
 
     # ---- heroes.js
-    out = ["// 武將資料庫：由 tools/sync_official.py 依《率土之濱》官網武將庫（hero_extra.json）產生，請勿手動修改數值",
-           "// 官方有收錄的武將使用官方陣營、星級、統御、兵種、攻擊距離、四維與成長、攻城、自帶/傳承戰法；卡圖只記錄 iconId",
-           "// 欄位：名稱, 陣營, 星級, 統御, 兵種, 攻擊距離, 攻擊, 攻擊成長, 防禦, 防禦成長, 謀略, 謀略成長, 速度, 速度成長, 攻城, 攻城成長, 自帶戰法, 傳承戰法, 官方卡圖 iconId（0＝非官方武將）",
+    out = ["// 武將資料庫：由 tools/sync_official.py 依《率土之濱》官方武將庫產生（以台服 wjzl.js 為準，台服沒有的武將用網易 hero_extra.json），請勿手動修改數值",
+           "// 官方有收錄的武將使用官方陣營、星級、統御、兵種、攻擊距離、四維與成長、攻城、自帶/傳承戰法；卡圖只記錄來源與編號",
+           "// 欄位：名稱, 陣營, 星級, 統御, 兵種, 攻擊距離, 攻擊, 攻擊成長, 防禦, 防禦成長, 謀略, 謀略成長, 速度, 速度成長, 攻城, 攻城成長, 自帶戰法, 傳承戰法, 官方卡圖（tw:台服編號 / cn:網易編號 / 0＝非官方武將）",
            "'use strict';", "", "var HEROES = (function () {", "  const RAW = ["]
     last = None
     for row in rows:
@@ -664,7 +739,7 @@ def main():
         f.write(heroes_js)
 
     # ---- skills.js 官方區塊
-    blk = ['  // <official> 由 tools/sync_official.py 依官網戰法庫（skill_extra.json）產生，請勿手動修改',
+    blk = ['  // <official> 由 tools/sync_official.py 依官方戰法庫產生（以台服 jzzl.js 為準，台服沒有的用網易 skill_extra.json），請勿手動修改',
            '  const OFFICIAL = [', '    // ---- 武將自帶 / 傳承戰法']
     approx_list = []
     for sid in sorted(used):
@@ -690,8 +765,10 @@ def main():
     with open(p, 'w', encoding='utf-8') as f:
         f.write(new_src)
 
-    print('武將 %d 名（官方 %d、沿用 %d），官方戰法 %d 個、通用戰法覆寫 %d 個' % (
-        len(rows), sum(1 for r in rows if r[18]), sum(1 for r in rows if not r[18]), len(used), len(generic)))
+    tw_ids = {k['id'] for k in tw_skills}
+    print('武將 %d 名（台服 %d、網易 %d、沿用 %d），官方戰法 %d 個（台服 %d、網易 %d）、通用戰法覆寫 %d 個' % (
+        len(rows), sum(1 for r in rows if str(r[18]).startswith('tw:')), sum(1 for r in rows if str(r[18]).startswith('cn:')),
+        sum(1 for r in rows if not r[18]), len(used), sum(1 for x in used if x in tw_ids), sum(1 for x in used if x not in tw_ids), len(generic)))
     if approx_list:
         print('描述無法解析、以通用效果近似的戰法：' + '、'.join(approx_list))
     if a.report:

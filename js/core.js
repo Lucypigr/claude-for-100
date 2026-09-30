@@ -13,14 +13,14 @@ var Game = (function () {
     U.setSeed(seed ^ 0x5bd1e995);
     const aiN = opts.aiCount === undefined ? CFG.AI_COUNT : opts.aiCount;
     const mapN = opts.mapN || CFG.mapSizeFor(aiN);
-    World.generate(seed, mapN);
+    World.generate(seed, mapN, CFG.MAP_GEN_VER);
     T = World.T;
     Object.assign(G, {
       version: 1, seed, time: 0, acc: 0, speed: 1, paused: false,
       players: [], alliances: [], marches: [], nextMarch: 1, reports: [], nextReport: 1,
       chat: { world: [], sys: [], ally: {} }, notices: [], news: [],
       landSiege: {}, over: false, winner: -1, userId: 0, dirty: [], fx: [], lastDay: 0, rankCache: null, invites: [],
-      aiCount: aiN, mapN,
+      aiCount: aiN, mapN, genVer: CFG.MAP_GEN_VER,
     });
     P = G.players;
     landPos = new Int32Array(World.N * World.N).fill(-1);
@@ -1500,7 +1500,7 @@ var Game = (function () {
     const data = JSON.parse(str);
     if (data.v !== 2 && data.v !== 3) throw new Error('舊版存檔不相容');
     skOf = data.v === 2 ? legacySk : (s => (s && SKILLS[s]) ? s : null);
-    World.generate(data.G.seed, data.G.mapN || CFG.MAP_N);
+    World.generate(data.G.seed, data.G.mapN || CFG.MAP_N, data.G.genVer || 1);
     T = World.T;
     const N = World.N;
     // 城池：NPC 城池由種子重建（順序一致），主城與要塞重新套用

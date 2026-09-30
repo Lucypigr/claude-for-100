@@ -60,7 +60,8 @@ var World = (function () {
 
   function uvToGrid(u, v) { return [N * (v + u) / 2, N * (v - u) / 2]; }
 
-  function generate(seed, n) {
+  // ver：地圖生成版本（舊存檔用舊版比例重建，確保讀檔一致）
+  function generate(seed, n, ver) {
     N = n || CFG.MAP_N;
     W.N = N;
     W.seed = seed;
@@ -335,7 +336,8 @@ var World = (function () {
       (st.type === 'birth' ? plainIdx.birth : plainIdx.resource).push(i);
     }
     const DIST = {
-      birth: [0.19, 0.2, 0.19, 0.15, 0.11, 0.07, 0.048, 0.022, 0.01],
+      // v2：出生州提高 5、6 級地比例（由 1、2、4 級地調撥）
+      birth: (ver || 1) >= 2 ? [0.16, 0.18, 0.19, 0.14, 0.14, 0.10, 0.048, 0.022, 0.01] : [0.19, 0.2, 0.19, 0.15, 0.11, 0.07, 0.048, 0.022, 0.01],
       resource: [0.05, 0.09, 0.13, 0.17, 0.18, 0.15, 0.11, 0.075, 0.045],
     };
     for (const k of ['birth', 'resource']) {

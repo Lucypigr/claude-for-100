@@ -380,7 +380,7 @@ var UI = (function () {
     }
     if (owner >= 0) {
       const o = Game.P[owner];
-      h += row('擁有者', '<span class="link" data-act="gotoplayer" data-pid="' + o.id + '">' + E(o.name) + '</span>' + (o.alliance >= 0 ? ' 〔' + E(G.alliances[o.alliance].name) + '〕' : ''));
+      h += row('擁有者', '<span class="link" data-act="gotoplayer" data-pid="' + o.id + '">' + E(o.name) + '</span>' + (o.title ? ' <span class="bad">[' + E(o.title) + ']</span>' : '') + (o.alliance >= 0 ? ' 〔' + E(G.alliances[o.alliance].name) + '〕' + (G.alliances[o.alliance].lord >= 0 && G.alliances[G.alliances[o.alliance].lord] ? '<span class="muted">（附庸〔' + E(G.alliances[G.alliances[o.alliance].lord].name) + '〕）</span>' : '') : ''));
     } else if (city && city.alliance >= 0) h += row('佔領同盟', '〔' + E(G.alliances[city.alliance].name) + '〕');
     else h += row('擁有者', '無主之地');
     if (!city) {
@@ -1087,7 +1087,9 @@ var UI = (function () {
         '・第 1~3 天開荒（主城保護）；第 4 天開放出生州關口；第 9 天開放司隸；第 15 天開放洛陽。<br>' +
         '・佔領洛陽並堅守 48 小時即成就霸業；或於第 30 天依同盟城池積分決定霸主。' +
         L('十、AI 主公') +
-        '・天下共有 150 位 AI 主公，有新手、休閒、普通、老手與課長，會開荒、結盟、鋪路、攻城、搶地、報復、屯田練兵、建營帳分城，也會在頻道聊天。你在線時他們與你同時行動，離線時天下暫停。' +
+        '・天下共有 150 位 AI 主公，有新手、休閒、普通、老手與課長，會開荒、結盟、鋪路、攻城、搶地、報復、屯田練兵、建營帳分城，也會在頻道聊天。你在線時他們與你同時行動，離線時天下暫停。<br>' +
+        '・AI 各有<b>個性</b>：<b>火爆</b>的會跟鄰居結仇、在世界頻道互嗆並互搶地；每季有幾位<b>好戰者</b>專門打人、攻打主城；<b>叛徒</b>會在同盟交戰時倒戈投敵（標記 [叛徒]）；<b>龜縮</b>的只種田不打架；<b>梟雄</b>會收服附近弱盟為<b>附庸</b>，附庸聽其號令、跟打同一座城。<br>' +
+        '・<b>你當盟主時</b>，附近的 AI 會陸續申請加入你的同盟，並依你設定的目標鋪路、集結攻城（點城池選「設為同盟目標」）。小心盟裡混進叛徒。' +
         L('操作') +
         '・拖曳 / WASD / 方向鍵平移，滾輪或雙指縮放；H 回主城；空白鍵暫停；右上可調速度。</div>';
     },

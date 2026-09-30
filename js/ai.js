@@ -39,9 +39,49 @@ var AI = (function () {
         chat: d.chat * U.rrange(0.4, 1.3),
         leader: false,
         loyalty: U.rrange(0.3, 1),
+        persona: 'normal',
       };
-    });
+    }).map(assignPersonaInit(n));
   }
+  // 個性（與技術類型無關）：梟雄、好戰者、叛徒、火爆鄰居、龜縮
+  const PERSONA = {
+    overlord: { label: '梟雄' }, warmonger: { label: '好戰者' }, traitor: { label: '叛徒' },
+    hothead: { label: '火爆' }, turtle: { label: '龜縮' }, normal: { label: '一般' },
+  };
+  function assignPersonaInit(n) {
+    const quota = { overlord: Math.max(1, Math.round(n / 75)), warmonger: Math.max(2, Math.round(n / 25)), traitor: Math.max(2, Math.round(n / 30)) };
+    const used = { overlord: 0, warmonger: 0, traitor: 0 };
+    return pr => {
+      const t = pr.type;
+      if (used.overlord < quota.overlord && (t === 'whale' || t === 'veteran')) { used.overlord++; return setPersona(pr, 'overlord'); }
+      if (used.warmonger < quota.warmonger && t !== 'newbie' && t !== 'casual') { used.warmonger++; return setPersona(pr, 'warmonger'); }
+      if (used.traitor < quota.traitor && t !== 'newbie') { used.traitor++; return setPersona(pr, 'traitor'); }
+      const r = U.rnd();
+      if (r < 0.22 && t !== 'newbie') return setPersona(pr, 'hothead');
+      if (r < 0.4 && (t === 'casual' || t === 'newbie' || t === 'regular')) return setPersona(pr, 'turtle');
+      return pr;
+    };
+  }
+  function setPersona(pr, k) {
+    pr.persona = k;
+    if (k === 'overlord') { pr.skill = Math.max(pr.skill, 0.95); pr.aggr = Math.max(pr.aggr, 0.8); pr.gold += 20000; pr.daily = Math.max(pr.daily, 3000); pr.act = Math.min(pr.act, 3); pr.chat = Math.max(pr.chat, 0.9); }
+    if (k === 'warmonger') { pr.aggr = 1; pr.skill = Math.max(pr.skill, 0.7); pr.chat = Math.max(pr.chat, 0.9); }
+    if (k === 'traitor') { pr.loyalty = 0; }
+    if (k === 'hothead') { pr.aggr = Math.max(pr.aggr, 0.65); pr.chat = Math.max(pr.chat, 0.8); }
+    if (k === 'turtle') { pr.aggr = 0.02; }
+    return pr;
+  }
+  function persona(p) { return p.prof.persona || 'normal'; }
+  // 同一陣營：同盟相同，或有從屬（附庸）關係
+  function sameBloc(a1, a2) {
+    if (a1 < 0 || a2 < 0) return false;
+    if (a1 === a2) return true;
+    const A = G().alliances[a1], B = G().alliances[a2];
+    if (!A || !B || A.dead || B.dead) return false;
+    const la = A.lord >= 0 && !G().alliances[A.lord].dead ? A.lord : a1, lb = B.lord >= 0 && !G().alliances[B.lord].dead ? B.lord : a2;
+    return la === lb;
+  }
+  function userLed(a) { return a && !Game.P[a.leader].ai; }
 
   function calib() {
     if (GP) return;
@@ -88,6 +128,8 @@ var AI = (function () {
         .sort((a, b) => (b.prof.skill + (b.prof.type === 'whale' ? 0.3 : 0)) - (a.prof.skill + (a.prof.type === 'whale' ? 0.3 : 0)));
       if (arr.length) { arr[0].prof.leader = true; mem(arr[0]).createAt = U.rint(20, 240); }
     }
+    // 梟雄一定自立門戶，而且很早開盟
+    for (const p of P) if (p.ai && persona(p) === 'overlord') { p.prof.leader = true; mem(p).createAt = U.rint(10, 90); }
     // 額外幾位想自立門戶的玩家
     const extra = U.shuffle(P.filter(p => p.ai && !p.prof.leader && (p.prof.type === 'whale' || p.prof.type === 'veteran' || p.prof.type === 'regular'))).slice(0, 3);
     for (const p of extra) { p.prof.leader = true; mem(p).createAt = U.rint(200, 900); }
@@ -116,6 +158,7 @@ var AI = (function () {
     // 要塞
     manageFort(p);
     manageBranch(p);
+    if (g.time >= (m.nextPersona || 0)) { m.nextPersona = g.time + U.rint(90, 180); personaThink(p); }
     // 軍事
     military(p);
   }
@@ -506,10 +549,12 @@ var AI = (function () {
       }
       let target = -1;
       // 1) 同盟行動
-      if (p.alliance >= 0 && U.rnd() < 0.35 + pr.skill * 0.6) target = allianceAction(p, team, tp);
+      if (p.alliance >= 0 && U.rnd() < obeyP(p)) target = allianceAction(p, team, tp);
       if (target === -2) continue; // 等待集結
       // 2) 報復 / 征服（領地已滿時更傾向搶奪他人高級地）
-      const pvpP = pr.aggr * (p.landCount >= p.landCap - 2 ? 1 : 0.6);
+      let pvpP = pr.aggr * (p.landCount >= p.landCap - 2 ? 1 : 0.6);
+      if (activeFeud(p)) pvpP = Math.max(pvpP, 0.7);
+      if (persona(p) === 'turtle') pvpP = 0;
       if (target < 0 && U.rnd() < pvpP) target = pvpTarget(p, team, tp);
       // 3) 擴張
       if (target < 0) target = expandTarget(p, team, tp);
@@ -676,7 +721,7 @@ var AI = (function () {
       const o = T.owner[i];
       if (o < 0 || o === p.id) continue;
       const op = Game.P[o];
-      if (op.alliance >= 0 && op.alliance === p.alliance) continue;
+      if (op.alliance >= 0 && sameBloc(op.alliance, p.alliance)) continue;
       if (p.captor >= 0 && (o === p.captor || (Game.P[p.captor].alliance >= 0 && op.alliance === Game.P[p.captor].alliance))) continue;
       const L = T.lvl[i];
       // 估計對方駐守與守軍
@@ -685,13 +730,13 @@ var AI = (function () {
       const w = winP(perceived(p, ratio));
       if (w < 0.55) continue;
       let v = L * 60 + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 150 : 0) - World.dist(i, team.base) * 5;
-      if (op.power > p.power * 1.5 && o !== foe) v -= 200; // 不惹強者
+      if (op.power > p.power * 1.5 && o !== foe && persona(p) !== 'warmonger') v -= 200; // 不惹強者（好戰者例外）
       if (p.landCount >= p.landCap && L < 5) continue;
       if (v > bs) { bs = v; best = i; }
     }
     if (best >= 0 && bs > 150) return best;
     // 攻打弱小鄰居主城（課長/老手）
-    if (pr.aggr > 0.6 && pr.skill > 0.5 && g.time > CFG.PROTECT_DAYS * 1440) {
+    if (pr.aggr > 0.6 && (pr.skill > 0.5 || persona(p) === 'hothead') && g.time > CFG.PROTECT_DAYS * 1440) {
       const m = mem(p);
       if (m.conquest >= 0) {
         const op = Game.P[m.conquest];
@@ -711,7 +756,14 @@ var AI = (function () {
           if (best2 >= 0) return best2;
           m.conquest = -1;
         }
-      } else if (U.chance(0.25)) {
+      } else if (activeFeud(p) && U.chance(0.5)) {
+        // 世仇：推進到對方主城下
+        const op = Game.P[activeFeud(p)];
+        if (op && op.captor < 0 && g.time >= op.protectEnd && !(op.alliance >= 0 && sameBloc(op.alliance, p.alliance)) && bestTeamPower(op) < tp * 1.3) {
+          m.conquest = op.id; m.conquestUntil = g.time + 720;
+          return Game.attackBlock(p, op.cityTile) ? -1 : op.cityTile;
+        }
+      } else if (U.chance(persona(p) === 'warmonger' ? 0.6 : 0.25)) {
         for (const i of cands) {
           const o = T.owner[i];
           if (o < 0) continue;
@@ -719,7 +771,8 @@ var AI = (function () {
           if (op.alliance >= 0 && op.alliance === p.alliance) continue;
           if (World.dist(i, op.cityTile) > 12 || g.time < op.protectEnd || op.captor >= 0) continue;
           const hostile = o in p.grudge || (op.alliance >= 0 && isEnemyAlliance(p, op.alliance));
-          if ((op.power < p.power * (hostile ? 0.95 : 0.7)) && bestTeamPower(op) < tp * 0.9) {
+          const bold = persona(p) === 'warmonger' ? 1.3 : 1;
+          if ((op.power < p.power * (hostile ? 0.95 : 0.7) * bold) && bestTeamPower(op) < tp * 0.9 * bold) {
             m.conquest = o;
             m.conquestUntil = g.time + 720;
             if (U.chance(0.5)) Game.say(p, 'world', U.pick(CHAT.threaten).replace('{n}', op.name));
@@ -824,15 +877,17 @@ var AI = (function () {
   }
   function alliancesThink(now) {
     const g = G();
+    if (now !== undefined && now % 60 === 17) feudTick();
     for (const a of g.alliances) {
       if (a.dead) continue;
       if (now !== undefined && (now + a.id * 7) % 30 !== 0) continue; // 各同盟錯開思考，避免卡頓
       const leader = Game.P[a.leader];
       inviteUser(a, leader);
+      if (!leader.ai) recruitForUser(a);
       // 使用者當盟主時，由使用者設定目標；AI 僅協助計算鋪路
       if (a.target >= 0) {
         const city = World.cities[a.target];
-        if (city.alliance === a.id || Game.cityLockedDay(city) > Game.day()) { a.target = -1; a.field = null; a.pave = null; }
+        if (city.alliance === a.id || sameBloc(city.alliance, a.id) || Game.cityLockedDay(city) > Game.day()) { a.target = -1; a.field = null; a.pave = null; }
       }
       if (a.target < 0 && leader.ai && a.members.length >= 3 && g.time >= (a.nextChoose || 0)) {
         chooseTarget(a);
@@ -875,6 +930,19 @@ var AI = (function () {
   function chooseTarget(a) {
     const g = G();
     const leader = Game.P[a.leader];
+    // 附庸同盟：跟隨宗主的目標
+    if (a.lord >= 0) {
+      const L = g.alliances[a.lord];
+      if (!L || L.dead) a.lord = -1;
+      else if (L.target >= 0) {
+        const c = World.cities[L.target];
+        if (c.alliance !== a.id && !sameBloc(c.alliance, a.id) && reachable(a, c)) {
+          a.target = c.id; a.targetSince = g.time; a.phase = 'pave'; a.field = null;
+          Game.say(leader, 'ally', '宗主〔' + L.name + '〕有令，全盟攻打' + CFG.CITY_TYPE_NAME[c.type] + '【' + c.name + '】(' + c.cx + ',' + c.cy + ')');
+          return;
+        }
+      }
+    }
     // 同盟重心
     let sx = 0, sy = 0, n = 0;
     for (const id of a.members) { const q = Game.P[id]; sx += World.X(q.cityTile); sy += World.Y(q.cityTile); n++; }
@@ -884,7 +952,7 @@ var AI = (function () {
     const cands = [];
     for (const c of World.cities) {
       if (World.isPlayerCity(c) || c.dead) continue;
-      if (c.alliance === a.id) continue;
+      if (c.alliance === a.id || sameBloc(c.alliance, a.id)) continue;
       if (Game.cityLockedDay(c) > Game.day()) continue;
       const d = Math.hypot(c.cx - sx, c.cy - sy);
       if (d > 85) continue;
@@ -1108,11 +1176,185 @@ var AI = (function () {
     // 弱盟成員跳槽
     if (p.alliance >= 0) {
       const a = G().alliances[p.alliance];
-      if (a.members.length < 5 && a.leader !== p.id && G().time > 4 * 1440 && U.rnd() < 0.3 * (1 - pr.loyalty)) {
+      if (a.members.length < 5 && a.leader !== p.id && !userLed(a) && G().time > 4 * 1440 && U.rnd() < 0.3 * (1 - pr.loyalty)) {
         Game.leaveAlliance(p);
         mem(p).joinAt = G().time + U.rint(10, 120);
       }
     }
+  }
+
+  // ================= 個性行為 =================
+  function obeyP(p) {
+    let o = 0.35 + p.prof.skill * 0.6;
+    const a = G().alliances[p.alliance];
+    if (userLed(a)) o += 0.25;                               // 聽從玩家盟主
+    if (a && (Game.P[a.leader].prof || {}).persona === 'overlord') o += 0.2; // 梟雄治軍嚴明
+    if (a && a.lord >= 0) o += 0.1;
+    if (persona(p) === 'turtle') o *= 0.4;
+    if (persona(p) === 'traitor') o *= 0.7;
+    return Math.min(0.97, o);
+  }
+  function feuds() { const g = G(); if (!g.feuds) g.feuds = []; return g.feuds; }
+  function activeFeud(p) {
+    for (const f of feuds()) if (!f.over && (f.a === p.id || f.b === p.id)) return f.a === p.id ? f.b : f.a;
+    return 0;
+  }
+  function personaThink(p) {
+    const k = persona(p), g = G();
+    if (g.time < CFG.PROTECT_DAYS * 1440 * 0.5) return;
+    if ((k === 'hothead' || k === 'warmonger') && !activeFeud(p) && U.rnd() < (k === 'warmonger' ? 0.5 : 0.25)) startFeud(p);
+    if (k === 'traitor') tryBetray(p);
+    if (k === 'overlord') subjugate(p);
+    if (k === 'turtle' && U.rnd() < 0.08 * p.prof.chat) later(p, 'world', U.pick(CHAT.turtle), U.rint(1, 20));
+    if (k === 'warmonger' && U.rnd() < 0.12) later(p, 'world', U.pick(CHAT.warmonger), U.rint(1, 20));
+  }
+  // 火爆鄰居 / 好戰者：挑一位鄰居結仇，在世界頻道嗆聲
+  function startFeud(p) {
+    const g = G();
+    let best = null, bd = 1e9;
+    for (const q of Game.P) {
+      if (q === p || q.captor >= 0) continue;
+      if (q.alliance >= 0 && sameBloc(q.alliance, p.alliance)) continue;
+      const d = World.dist(q.cityTile, p.cityTile);
+      if (d > 26) continue;
+      if (persona(p) !== 'warmonger' && q.power > p.power * 1.8) continue;
+      if (activeFeud(q) && U.rnd() < 0.7) continue;
+      const v = d + U.rnd() * 8;
+      if (v < bd) { bd = v; best = q; }
+    }
+    if (!best) return;
+    feuds().push({ a: p.id, b: best.id, since: g.time, last: g.time, over: false });
+    p.grudge[best.id] = g.time;
+    later(p, 'world', U.pick(CHAT.feudStart).replace('{n}', best.name), U.rint(0, 5));
+    if (best.ai) {
+      best.grudge[p.id] = g.time;
+      const meek = persona(best) === 'turtle' || best.prof.type === 'newbie';
+      later(best, 'world', U.pick(meek ? CHAT.turtleReply : CHAT.feudReply).replace('{n}', p.name), U.rint(3, 20));
+    } else Game.notify(best.id, '【' + p.name + '】在世界頻道向你挑釁，小心他來搶地！', 'bad');
+  }
+  // 每小時：世仇互嗆、維持仇恨，一方淪陷或 3 天後結束
+  function feudTick() {
+    const g = G();
+    for (const f of feuds()) {
+      if (f.over) continue;
+      const A = Game.P[f.a], B = Game.P[f.b];
+      if (!A || !B) { f.over = true; continue; }
+      const loser = B.captor === A.id ? B : A.captor === B.id ? A : null;
+      if (loser) {
+        f.over = true;
+        const w = loser === A ? B : A;
+        if (w.ai) later(w, 'world', U.pick(CHAT.feudWin).replace('{n}', loser.name), U.rint(1, 10));
+        continue;
+      }
+      if (g.time - f.since > 3 * 1440) {
+        f.over = true;
+        const q = A.ai ? A : B, o = q === A ? B : A;
+        if (q.ai) later(q, 'world', U.pick(CHAT.feudEnd).replace('{n}', o.name), U.rint(1, 30));
+        continue;
+      }
+      if (A.ai) A.grudge[B.id] = g.time;
+      if (B.ai && persona(B) !== 'turtle') B.grudge[A.id] = g.time;
+      if (g.time - f.last > 90 && U.rnd() < 0.35) {
+        f.last = g.time;
+        const q = U.chance(0.5) ? A : B, o = q === A ? B : A;
+        if (q.ai) {
+          const meek = persona(q) === 'turtle';
+          later(q, 'world', U.pick(meek ? CHAT.turtleReply : CHAT.feudInsult).replace('{n}', o.name), U.rint(0, 10));
+          if (o.ai && !meek && U.chance(0.6)) later(o, 'world', U.pick(persona(o) === 'turtle' ? CHAT.turtleReply : CHAT.feudReply).replace('{n}', q.name), U.rint(5, 25));
+        }
+      }
+    }
+    if (feuds().length > 200) g.feuds = feuds().filter(f => !f.over || g.time - f.since < 1440);
+  }
+  // 叛徒：同盟交戰或攻城時倒戈，投靠敵盟或最強的鄰盟
+  function tryBetray(p) {
+    const g = G(), m = mem(p);
+    if (m.betrayed || p.alliance < 0 || Game.day() < 4) return;
+    const a = g.alliances[p.alliance];
+    if (a.leader === p.id) return;
+    const tense = (a.enemy >= 0 && g.alliances[a.enemy] && !g.alliances[a.enemy].dead) || a.phase === 'siege';
+    if (U.rnd() > (tense ? 0.35 : 0.06)) return;
+    let to = null;
+    if (a.enemy >= 0 && g.alliances[a.enemy] && !g.alliances[a.enemy].dead && g.alliances[a.enemy].members.length < CFG.ALLIANCE_MAX) to = g.alliances[a.enemy];
+    if (!to) {
+      let bp = a.power * 0.8;
+      for (const b of g.alliances) {
+        if (b.dead || b.id === a.id || b.members.length >= CFG.ALLIANCE_MAX || sameBloc(b.id, a.id)) continue;
+        const L = Game.P[b.leader];
+        if (World.dist(L.cityTile, p.cityTile) > 90) continue;
+        if (b.power > bp) { bp = b.power; to = b; }
+      }
+    }
+    if (!to) return;
+    const oldA = a;
+    const oldMembers = oldA.members.filter(id => id !== p.id);
+    Game.leaveAlliance(p);
+    if (!Game.joinAlliance(p, to.id, true).ok) return;
+    m.betrayed = true;
+    p.title = '叛徒';
+    Game.say(p, 'world', U.pick(CHAT.betray).replace('{a}', oldA.name).replace('{b}', to.name));
+    Game.sys('world', '【倒戈】' + p.name + ' 叛出〔' + oldA.name + '〕，投靠〔' + to.name + '〕！');
+    for (const id of oldMembers) { const q = Game.P[id]; if (q && q.ai) q.grudge[p.id] = g.time; }
+    const who = Game.P[U.pick(oldMembers)];
+    if (who && who.ai) later(who, 'ally', U.pick(CHAT.betrayed).replace('{n}', p.name), U.rint(1, 6));
+    const L = Game.P[oldA.leader];
+    if (L) p.grudge[L.id] = g.time;
+    if (!L.ai) Game.notify(L.id, '盟員 ' + p.name + ' 叛變投靠〔' + to.name + '〕了！', 'bad');
+  }
+  // 梟雄：收服附近較弱的 AI 同盟為附庸，附庸跟隨其目標、互不攻擊
+  function subjugate(p) {
+    const g = G();
+    if (p.alliance < 0) return;
+    const a = g.alliances[p.alliance];
+    if (a.leader !== p.id || a.lord >= 0) return;
+    if (U.rnd() < 0.1 * p.prof.chat) later(p, 'world', U.pick(CHAT.overlord).replace('{a}', a.name).replace('{s}', World.states[p.state].name), U.rint(1, 20));
+    if (Game.day() < 3 || U.rnd() > 0.35) return;
+    let best = null, bd = 1e9;
+    for (const b of g.alliances) {
+      if (b.dead || b.id === a.id || b.lord >= 0 || userLed(b)) continue;
+      if (g.alliances.some(x => !x.dead && x.lord === b.id)) continue; // 別人的宗主不收
+      if (b.power > a.power * 0.7) continue;
+      const L = Game.P[b.leader];
+      if ((L.prof || {}).persona === 'overlord') continue;
+      const d = World.dist(L.cityTile, p.cityTile);
+      if (d > 80) continue;
+      if (d < bd) { bd = d; best = b; }
+    }
+    if (!best) return;
+    best.lord = a.id;
+    if (best.enemy === a.id) best.enemy = -1;
+    if (a.enemy === best.id) a.enemy = -1;
+    if (!p.title) p.title = '霸主';
+    Game.sys('world', '【歸順】〔' + best.name + '〕歸順〔' + a.name + '〕，聽其號令！');
+    later(Game.P[best.leader], 'world', U.pick(CHAT.vassal).replace('{a}', a.name).replace('{b}', best.name), U.rint(1, 8));
+    if (a.target >= 0 && U.chance(0.6)) {
+      const c = World.cities[a.target];
+      later(p, 'world', U.pick(CHAT.overlordOrder).replace('{a}', a.name).replace('{c}', c.name + '(' + c.cx + ',' + c.cy + ')'), U.rint(3, 20));
+      best.target = -1; best.nextChoose = 0;
+    }
+  }
+  // 玩家當盟主：附近的 AI 會陸續申請加入並聽從指揮
+  function recruitForUser(a) {
+    const g = G();
+    if (a.members.length >= CFG.ALLIANCE_MAX || U.rnd() > (a.members.length < 12 ? 0.5 : 0.25)) return;
+    const u = Game.P[a.leader];
+    const cands = Game.P.filter(q => {
+      if (!q.ai || q.alliance === a.id || q.captor >= 0) return false;
+      if (World.dist(q.cityTile, u.cityTile) > 130) return false;
+      if (q.alliance < 0) return !(q.prof.leader && mem(q).createAt !== undefined);
+      const b = g.alliances[q.alliance];
+      if (b.leader === q.id || persona(q) === 'overlord') return false;
+      // 小盟成員、或對原盟忠誠度低的人會跳槽過來（主公威望越高越吸引人）
+      const pull = Math.min(0.35, u.power / Math.max(1, b.power) * 0.1);
+      return b.members.length < 8 || q.prof.loyalty < 0.35 + pull;
+    });
+    if (!cands.length) return;
+    const q = U.weighted(cands, x => (x.alliance < 0 ? 3 : 1) * (x.state === u.state ? 2 : 1) * (persona(x) === 'turtle' ? 0.5 : 1));
+    if (!q) return;
+    if (q.alliance >= 0) Game.leaveAlliance(q);
+    if (!Game.joinAlliance(q, a.id, true).ok) return;
+    later(q, 'ally', U.pick(CHAT.obeyUser), U.rint(1, 6));
+    Game.notify(u.id, q.name + '（' + q.prof.label + '）加入了你的同盟', 'good');
   }
 
   // ================= 聊天 =================
@@ -1195,7 +1437,7 @@ var AI = (function () {
   }
 
   return {
-    makeProfiles, init, restore, interval, think, setupLeaders, alliancesThink, chatTick, daily,
+    makeProfiles, init, restore, PERSONA, sameBloc, interval, think, setupLeaders, alliancesThink, chatTick, daily,
     onThreat, onAttacked, onLandLost, onCaptured, onBattleResult, onCityCaptured, onJoin, onUserChat,
     get GP() { calib(); return GP; }, get CP() { calib(); return CP; }, R50, CR50, TYPES, winP, buildField, updatePave, cityAdjacent, reachable,
     _pending: pending,

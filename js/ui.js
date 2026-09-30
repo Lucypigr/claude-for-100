@@ -581,6 +581,22 @@ var UI = (function () {
       }
       case 'drillpick': panelArg = { drill: d.sid }; refreshPanel(); break;
       case 'drillcancel': panelArg = null; refreshPanel(); break;
+      case 'awaken': {
+        const h = Game.heroByUid(user, heroSel);
+        if (!h) break;
+        const fs = Game.awakenFodder(user, h).sort((a, b) => Game.tpl(a).star - Game.tpl(b).star || a.lv - b.lv).slice(0, CFG.AWAKEN_FODDER);
+        if (!ask('覺醒【' + Game.tpl(h).name + '】將消耗：' + fs.map(x => Game.tpl(x).star + '★' + Game.tpl(x).name + ' Lv' + x.lv).join('、') + '。確定嗎？')) break;
+        const r = Game.awakenHero(user, heroSel, fs.map(x => x.uid));
+        toast(r.ok ? Game.tpl(h).name + ' 覺醒成功！' : r.msg, r.ok ? 'good' : 'warn');
+        refreshPanel(); break;
+      }
+      case 'event': {
+        const ev = EVENT_SKILLS.find(e => e.id === d.ev);
+        if (!ev || !ask('兌換【' + SKILLS[ev.skill].name + '】將消耗：' + ev.heroes.join('、') + '。確定嗎？')) break;
+        const r = Game.exchangeEvent(user, d.ev);
+        toast(r.ok ? '學會事件戰法【' + SKILLS[r.skill].name + '】' : r.msg, r.ok ? 'good' : 'warn');
+        refreshPanel(); break;
+      }
       case 'advance': { const r = Game.advanceHero(user, heroSel, +d.f); toast(r.ok ? '進階成功！獲得 10 點屬性點' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'inherit': {
         const h = Game.heroByUid(user, heroSel);
@@ -827,9 +843,17 @@ var UI = (function () {
     },
 
     skills() {
-      let h = '<div class="muted">戰法來源：武將自帶戰法、傳承（消耗三星以上武將）。B 級戰法傳承即可學會；A 級傳承得 ' + CFG.INHERIT_PROG.A + '%、S 級得 ' + CFG.INHERIT_PROG.S + '% 演練進度，需消耗其他武將<b>演練</b>至 100% 才能學習。<br>戰法 1~10 級，效果 ' + Math.round(CFG.skillScale(1) * 100) + '%~100%，以<b>戰法點</b>升級；戰法點來自<b>轉化</b>武將與每日發放。武將 5 級開啟第二戰法欄、20 級開啟第三戰法欄。</div>';
+      let h = '<div class="muted">戰法來源：武將自帶戰法、傳承（消耗三星以上武將）。B 級戰法傳承即可學會；A 級傳承得 ' + CFG.INHERIT_PROG.A + '%、S 級得 ' + CFG.INHERIT_PROG.S + '% 演練進度，需消耗其他武將<b>演練</b>至 100% 才能學習。<br>戰法 1~10 級，效果 ' + Math.round(CFG.skillScale(1) * 100) + '%~100%，以<b>戰法點</b>升級；戰法點來自<b>轉化</b>武將與每日發放。武將 5 級開啟第二戰法欄、20 級或覺醒後開啟第三戰法欄。</div>';
       h += '<div class="sec-t">戰法點 ' + U.fmtFull(user.skp) + '</div>';
       const drills = Object.keys(user.libp);
+      h += '<div class="sec-t">事件戰法</div><div class="muted" style="font-size:12px">集齊指定武將（需未上陣，兌換時消耗）即可直接學會，不需演練。</div>';
+      for (const ev of EVENT_SKILLS) {
+        const sk = SKILLS[ev.skill];
+        if (!sk) continue;
+        const st = Game.eventStatus(user, ev);
+        h += '<div class="drill"><span style="min-width:88px">' + ev.name + '</span><span class="q-' + sk.q + '" style="min-width:80px" title="' + E(sk.desc) + '">【' + sk.name + '】</span><span style="flex:1">' + ev.heroes.map(n => '<span class="' + (st.missing.includes(n) ? 'muted' : 'good') + '">' + n + '</span>').join('、') + '</span>' +
+          (st.done ? '<span class="good">已擁有</span>' : '<button class="btn small gold" data-act="event" data-ev="' + ev.id + '"' + (st.missing.length ? ' disabled' : '') + '>兌換</button>') + '</div>';
+      }
       h += '<div class="sec-t">研究中（演練）</div>';
       if (!drills.length) h += '<div class="muted">沒有研究中的戰法。傳承 A/S 級戰法後會出現在這裡。</div>';
       for (const sid of drills) {
@@ -985,7 +1009,7 @@ var UI = (function () {
         '<div class="sec-t">一、開荒</div>・點擊主城周圍的土地，選「出征」派部隊佔領。只能攻打與<b>自己或同盟領地相鄰</b>的土地。<br>・土地等級越高，守軍越強、產量越高。先打 1~3 級地讓武將升級，再挑戰高級地。<br>・領地數量受<b>名望</b>限制；首次佔領土地、升級建築可提高名望。領地滿了就放棄低級地換高級地。' +
         '<div class="sec-t">二、內政</div>・「主城」升級建築：資源建築提高產量、校場增加部隊、兵營提高帶兵、統帥廳提高統御、倉庫提高存量。<br>・君王殿升級需要四種資源建築達到一定等級。' +
         '<div class="sec-t">三、武將與部隊</div>・每支部隊 3 名武將：<b>大營</b>（陣亡即敗）、中軍、前鋒。統御(cost)總和不可超過上限。<br>・兵種克制：騎克步、步克弓、弓克騎。同陣營或同兵種三人有加成。<br>・戰鬥：準備回合發動指揮/被動戰法，之後 8 回合依速度行動；8 回合未分勝負為平局。<br>・戰鬥損失的兵力約一半成為<b>傷兵</b>，部隊回主城待命時自動治療；其餘需「征兵」補充（消耗木、鐵、糧與<b>預備兵</b>，預備兵由募兵所每小時產出）。出征消耗 20 體力，每小時恢復 20。<br>・<b>士氣</b>：出發地 6 格外每多 1 格士氣 -1.5（最低 40），士氣越低傷害越低。可調動部隊到要塞或同盟城池再出征。' +
-        '<div class="sec-t">戰法</div>・戰法 1~10 級，以<b>戰法點</b>升級（1 級效果 75%）。戰法點來自「轉化」多餘武將與每日發放。<br>・「傳承」三星以上武將取得其戰法：B 級直接學會，A/S 級需消耗其他武將「演練」至 100%。' +
+        '<div class="sec-t">戰法</div>・戰法 1~10 級，以<b>戰法點</b>升級（1 級效果 75%）。戰法點來自「轉化」多餘武將與每日發放。<br>・「傳承」三星以上武將取得其戰法：B 級直接學會，A/S 級需消耗其他武將「演練」至 100%。<br>・<b>事件戰法</b>：集齊指定武將兌換，直接學會。<br>・<b>覺醒</b>：四星以上武將消耗 3 名低一星以上的閒置武將，立即開啟第三戰法欄並提升屬性。加點可隨時免費重置。' +
         '<div class="sec-t">四、同盟與攻城</div>・加入同盟後，同盟領地也可作為進攻起點。盟主設定目標後，全盟<b>鋪路</b>至城池旁，再集結攻城。<br>・攻城：先擊敗城池守軍（60 分鐘內未攻下守軍會恢復），再用兵力拆除耐久，歸零即佔領。<br>・城池提供同盟全員產量加成與賽季積分。' +
         '<div class="sec-t">五、賽季</div>・第 1~3 天開荒（主城保護）；第 4 天開放出生州關口；第 9 天開放司隸；第 15 天開放洛陽。<br>・佔領洛陽並堅守 48 小時即成就霸業；或於第 30 天依同盟積分決定霸主。' +
         '<div class="sec-t">六、AI 主公</div>・天下共有 150 位 AI 主公，有新手、休閒、普通、老手與課長，會開荒、結盟、鋪路、攻城、搶地、報復，也會在頻道聊天。你在線時他們與你同時行動。</div>';
@@ -1020,7 +1044,7 @@ var UI = (function () {
     o += '<div>等級 ' + h.lv + (h.lv < CFG.HERO_MAX_LV ? '　<span class="muted">經驗 ' + Math.floor(h.exp) + '/' + CFG.expNeed(h.lv) + '</span>' : '　<span class="warn">已滿級</span>') + '</div>';
     o += '<div class="bar exp"><i style="width:' + (h.lv >= CFG.HERO_MAX_LV ? 100 : h.exp / CFG.expNeed(h.lv) * 100) + '%"></i></div>';
     o += '<div class="muted" style="margin-top:3px">兵力 ' + h.troops + '/' + Game.heroCap(user, h) + (h.wnd > 0 ? ' <span class="wtxt">傷兵 ' + h.wnd + '</span>' : '') + '　體力 ' + Math.floor(Game.getSta(h)) + '/' + CFG.STAMINA_MAX + '</div>';
-    o += '<div class="muted">' + (h.team >= 0 ? '所屬：第' + (h.team + 1) + '部隊' : '未上陣') + (h.adv ? '　進階 ' + h.adv + '/5' : '') + '</div></div></div>';
+    o += '<div class="muted">' + (h.team >= 0 ? '所屬：第' + (h.team + 1) + '部隊' : '未上陣') + (h.adv ? '　進階 ' + h.adv + '/5' : '') + (h.awk ? '　<span class="good">已覺醒</span>' : '') + '</div></div></div>';
     o += '<div class="sec-t">屬性' + (fp > 0 ? ' <span class="good" style="font-size:13px">可分配 ' + fp + ' 點</span>' : '') + '</div>';
     for (const [k, n, g] of [['atk', '攻擊', 'atkG'], ['def', '防禦', 'defG'], ['int', '謀略', 'intG'], ['spd', '速度', 'spdG']]) {
       o += '<div class="attr"><span class="muted">' + n + '</span><span class="v">' + s[k].toFixed(1) + ' <span class="g">(+' + t[g] + '/級' + (h.pts[k] ? '，加點 ' + h.pts[k] : '') + ')</span></span><span>' + (fp > 0 ? '<button class="btn small pbtn" data-act="addpt" data-stat="' + k + '">+1</button> <button class="btn small pbtn" style="width:32px" data-act="addpt" data-stat="' + k + '" data-n="' + fp + '">+' + fp + '</button>' : '') + '</span></div>';
@@ -1032,7 +1056,7 @@ var UI = (function () {
     for (let k = 0; k < 3; k++) {
       const sid = h.sk[k];
       const unl = Game.slotUnlocked(h, k);
-      if (!unl) { o += '<div class="skslot locked"><span class="muted">' + (k === 1 ? '5 級解鎖' : '20 級解鎖') + '</span></div>'; continue; }
+      if (!unl) { o += '<div class="skslot locked"><span class="muted">' + (k === 1 ? '5 級解鎖' : '20 級或覺醒後解鎖') + '</span></div>'; continue; }
       if (sid) {
         const sk = SKILLS[sid];
         const lv = h.sl[k] || 1;
@@ -1049,6 +1073,14 @@ var UI = (function () {
     }
     // 進階/傳承
     const dupes = user.heroes.filter(x => x !== h && x.t === h.t && x.team < 0);
+    o += '<div class="sec-t">覺醒</div>';
+    if (h.awk) o += '<div class="good" style="font-size:13px">已覺醒：第三戰法欄開啟、基礎屬性 +' + Math.round(CFG.AWAKEN_STAT * 100) + '%、屬性點 +' + CFG.AWAKEN_POINTS + '</div>';
+    else if (t.star < CFG.AWAKEN_MIN_STAR) o += '<div class="muted" style="font-size:12px">四星以上武將才能覺醒。</div>';
+    else {
+      const fd = Game.awakenFodder(user, h);
+      o += '<div class="muted" style="font-size:12px">消耗 ' + CFG.AWAKEN_FODDER + ' 名 ' + (t.star - 1) + ' 星以上閒置武將（優先使用星級、等級最低者）：立即開啟第三戰法欄、基礎屬性 +' + Math.round(CFG.AWAKEN_STAT * 100) + '%、屬性點 +' + CFG.AWAKEN_POINTS + '。目前可用素材 ' + fd.length + ' 名。</div>';
+      o += '<button class="btn small gold" data-act="awaken"' + (fd.length >= CFG.AWAKEN_FODDER ? '' : ' disabled') + '>覺醒</button>';
+    }
     o += '<div class="sec-t">進階・傳承・轉化</div>';
     if (dupes.length && h.adv < 5) o += '<button class="btn small gold" data-act="advance" data-f="' + dupes[0].uid + '">進階（消耗同名武將，+10 屬性點）</button> ';
     else o += '<span class="muted" style="font-size:12px">擁有同名武將時可進階。</span> ';

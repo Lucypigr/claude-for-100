@@ -64,6 +64,11 @@ var CFG = {
   // 演練：傳承取得的戰法需演練至 100% 才能使用
   INHERIT_PROG: { D: 100, C: 100, B: 100, A: 50, S: 25 },
   DRILL_PROG: [0, 5, 10, 20, 40, 70],          // 依素材星級增加演練進度
+  // 覺醒：四星以上武將消耗 3 名閒置武將（星級 ≥ 本身星級 -1），立即開啟第三戰法欄、基礎屬性 +8%、額外 10 屬性點
+  AWAKEN_MIN_STAR: 4,
+  AWAKEN_FODDER: 3,
+  AWAKEN_STAT: 0.08,
+  AWAKEN_POINTS: 10,
   // 行軍：每格分鐘數
   minPerTile: function (spd) { return 240 / (Math.max(20, spd) + 60); },
   // 攻城值
@@ -170,4 +175,15 @@ var QUESTS = [
   { id: 'q12', name: '攻城略地', desc: '參與攻下一座城池', check: p => p.stats.cities >= 1, reward: { gold: 300 } },
   { id: 'q13', name: '六級要地', desc: '佔領一塊 6 級以上土地', check: p => p.stats.maxLandLv >= 6, reward: { gold: 300 } },
   { id: 'q14', name: '名震一方', desc: '名望達到 10000', check: p => p.fame >= 10000, reward: { gold: 500 } },
+];
+
+// 事件戰法：集齊指定武將（兌換時消耗，需未上陣）即可直接學會戰法，不需演練
+var EVENT_SKILLS = [
+  { id: 'ev_dashang', name: '江東群英', skill: 'o200198', heroes: ['魯肅', '丁奉', '韓當'] },
+  { id: 'ev_shenbing', name: '河北雙雄', skill: 'o200204', heroes: ['顏良', '文醜', '田豐'] },
+  { id: 'ev_biqi', name: '坐鎮許都', skill: 'o200194', heroes: ['于禁', '程昱', '曹洪'] },
+  { id: 'ev_wuxin', name: '吳中宿將', skill: 'o200201', heroes: ['潘璋', '朱桓', '陳武'] },
+  { id: 'ev_fanji', name: '冀州謀主', skill: 'o200220', heroes: ['沮授', '田豐', '甄姬'] },
+  { id: 'ev_duanjin', name: '西涼盟約', skill: 'o200228', heroes: ['韓遂', '閻行', '董襲'] },
+  { id: 'ev_yaoshu', name: '宮闈亂政', skill: 'o200237', heroes: ['張讓', '何進', '王允'] },
 ];

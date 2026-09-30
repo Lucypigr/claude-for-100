@@ -221,6 +221,16 @@ var AI = (function () {
         else if (Game.tpl(f).star >= 3 && !p.lib.includes(Game.tpl(f).inherit) && U.rnd() < pr.skill) Game.inheritHero(p, f.uid);
       }
     }
+    // 事件戰法：集齊武將就兌換
+    if (U.rnd() < 0.2 + pr.skill) for (const ev of EVENT_SKILLS) { const st = Game.eventStatus(p, ev); if (!st.done && !st.missing.length) Game.exchangeEvent(p, ev.id); }
+    // 覺醒：主力部隊的四星以上武將
+    if (U.rnd() < 0.1 + pr.skill * 0.6) {
+      for (const team of p.teams) for (const uid of team.slots) {
+        const h = Game.heroByUid(p, uid);
+        if (!h || h.awk || Game.tpl(h).star < CFG.AWAKEN_MIN_STAR) continue;
+        if (Game.awakenFodder(p, h).length >= CFG.AWAKEN_FODDER + 2) Game.awakenHero(p, h.uid);
+      }
+    }
     // 演練：用閒置低星武將推進研究中的戰法
     const fodder = () => p.heroes.filter(h => h.team < 0 && Game.tpl(h).star <= 3).sort((a, b) => Game.tpl(a).star - Game.tpl(b).star || a.lv - b.lv);
     for (const sid in p.libp) {

@@ -81,7 +81,7 @@ var Game = (function () {
   // ================= 武將 =================
   function addHero(p, tid) {
     const t = HEROES[tid];
-    const h = { uid: p.hid++, t: tid, lv: 1, exp: 0, troops: 0, wnd: 0, sta: CFG.STAMINA_MAX, staT: G.time || 0, pts: { atk: 0, def: 0, int: 0, spd: 0 }, adv: 0, sk: [t.skill, null, null], sl: [1, 1, 1], team: -1 };
+    const h = { uid: p.hid++, t: tid, lv: 1, exp: 0, troops: 0, wnd: 0, sta: CFG.STAMINA_MAX, staT: G.time || 0, pts: { atk: 0, def: 0, int: 0, spd: 0 }, adv: 0, sk: [t.skill, null, null], sl: [1, 1, 1], awk: 0, team: -1 };
     p.heroes.push(h);
     return h;
   }
@@ -91,16 +91,16 @@ var Game = (function () {
   // 可征兵空間（傷兵佔用帶兵名額，治療後歸隊）
   function heroRoom(p, h) { return Math.max(0, heroCap(p, h) - h.troops - (h.wnd || 0)); }
   function freePoints(h) {
-    const total = Math.floor(h.lv / 10) * CFG.POINTS_PER_10LV + h.adv * 10;
+    const total = Math.floor(h.lv / 10) * CFG.POINTS_PER_10LV + h.adv * 10 + (h.awk ? CFG.AWAKEN_POINTS : 0);
     return total - (h.pts.atk + h.pts.def + h.pts.int + h.pts.spd);
   }
   function heroStats(p, h) {
-    const t = tpl(h), L = h.lv - 1;
+    const t = tpl(h), L = h.lv - 1, aw = h.awk ? 1 + CFG.AWAKEN_STAT : 1;
     return {
-      atk: t.atk + t.atkG * L + h.pts.atk + p.b.shangwu * 4,
-      def: t.def + t.defG * L + h.pts.def + p.b.tiebi * 4,
-      int: t.int + t.intG * L + h.pts.int + p.b.junji * 4,
-      spd: t.spd + t.spdG * L + h.pts.spd + p.b.jifeng * 4,
+      atk: (t.atk + t.atkG * L) * aw + h.pts.atk + p.b.shangwu * 4,
+      def: (t.def + t.defG * L) * aw + h.pts.def + p.b.tiebi * 4,
+      int: (t.int + t.intG * L) * aw + h.pts.int + p.b.junji * 4,
+      spd: (t.spd + t.spdG * L) * aw + h.pts.spd + p.b.jifeng * 4,
       siege: Math.round(t.siege + (t.siegeG || 0) * L), range: t.range,
     };
   }
@@ -116,7 +116,45 @@ var Game = (function () {
     }
     if (h.lv >= CFG.HERO_MAX_LV) h.exp = 0;
   }
-  function slotUnlocked(h, k) { return k === 0 || (k === 1 && h.lv >= 5) || (k === 2 && h.lv >= 20); }
+  function slotUnlocked(h, k) { return k === 0 || (k === 1 && h.lv >= 5) || (k === 2 && (h.lv >= 20 || !!h.awk)); }
+  // 覺醒
+  function awakenFodder(p, h) {
+    const need = tpl(h).star - 1;
+    return p.heroes.filter(x => x !== h && x.team < 0 && tpl(x).star >= need);
+  }
+  function awakenHero(p, uid, fodderUids) {
+    const h = heroByUid(p, uid);
+    if (!h) return err('武將不存在');
+    if (h.awk) return err('已覺醒');
+    if (tpl(h).star < CFG.AWAKEN_MIN_STAR) return err('四星以上武將才能覺醒');
+    const pool = awakenFodder(p, h);
+    let fs = fodderUids ? fodderUids.map(u => pool.find(x => x.uid === u)).filter(Boolean) : pool.sort((a, b) => tpl(a).star - tpl(b).star || a.lv - b.lv).slice(0, CFG.AWAKEN_FODDER);
+    if (fs.length < CFG.AWAKEN_FODDER) return err('需要 ' + CFG.AWAKEN_FODDER + ' 名 ' + (tpl(h).star - 1) + ' 星以上的閒置武將');
+    for (const f of fs.slice(0, CFG.AWAKEN_FODDER)) removeHero(p, f);
+    h.awk = 1;
+    return ok();
+  }
+  // 事件戰法
+  function eventStatus(p, ev) {
+    const used = new Set();
+    const missing = [];
+    for (const name of ev.heroes) {
+      const c = p.heroes.filter(x => x.team < 0 && !used.has(x) && tpl(x).name === name).sort((a, b) => a.lv - b.lv)[0];
+      if (c) used.add(c); else missing.push(name);
+    }
+    return { done: p.lib.includes(ev.skill), missing, use: [...used] };
+  }
+  function exchangeEvent(p, evId) {
+    const ev = EVENT_SKILLS.find(e => e.id === evId);
+    if (!ev || !SKILLS[ev.skill]) return err('事件不存在');
+    const st = eventStatus(p, ev);
+    if (st.done) return err('已擁有此戰法');
+    if (st.missing.length) return err('缺少閒置武將：' + st.missing.join('、'));
+    for (const h of st.use) removeHero(p, h);
+    delete p.libp[ev.skill];
+    p.lib.push(ev.skill);
+    return ok({ skill: ev.skill });
+  }
 
   // ================= 部隊 =================
   function teamCount(p) { return Math.min(5, 1 + p.b.drill); }
@@ -439,7 +477,7 @@ var Game = (function () {
     const h = heroByUid(p, uid);
     if (!h) return err('武將不存在');
     if (k < 1 || k > 2) return err('無效欄位');
-    if (!slotUnlocked(h, k)) return err(k === 1 ? '武將 5 級解鎖第二戰法欄' : '武將 20 級解鎖第三戰法欄');
+    if (!slotUnlocked(h, k)) return err(k === 1 ? '武將 5 級解鎖第二戰法欄' : '武將 20 級或覺醒後解鎖第三戰法欄');
     if (sid) {
       if (!p.lib.includes(sid)) return err('尚未擁有此戰法');
       const s = SKILLS[sid];
@@ -1252,10 +1290,10 @@ var Game = (function () {
   };
   function packHero(h) {
     return [h.uid, h.t, h.lv, Math.round(h.exp), h.troops, Math.round(h.sta * 10) / 10, h.staT, h.pts.atk, h.pts.def, h.pts.int, h.pts.spd, h.adv,
-      h.sk.map(s => s || 0), h.team, h.wnd || 0, h.sl];
+      h.sk.map(s => s || 0), h.team, h.wnd || 0, h.sl, h.awk || 0];
   }
   function unpackHero(a) {
-    return { uid: a[0], t: a[1], lv: a[2], exp: a[3], troops: a[4], wnd: a[14] || 0, sta: a[5], staT: a[6], pts: { atk: a[7], def: a[8], int: a[9], spd: a[10] }, adv: a[11], sk: a[12].map(skOf), sl: a[15] || [1, 1, 1], team: a[13] };
+    return { uid: a[0], t: a[1], lv: a[2], exp: a[3], troops: a[4], wnd: a[14] || 0, sta: a[5], staT: a[6], pts: { atk: a[7], def: a[8], int: a[9], spd: a[10] }, adv: a[11], sk: a[12].map(skOf), sl: a[15] || [1, 1, 1], awk: a[16] || 0, team: a[13] };
   }
   function serialize() {
     const cities = World.cities.map(c => {
@@ -1366,6 +1404,7 @@ var Game = (function () {
     // 武將
     addHero, heroByUid, tpl, heroCap, heroRoom, heroStats, freePoints, getSta, gainExp, slotUnlocked,
     drawPack, advanceHero, inheritHero, learnSkill, addPoint, resetPoints,
+    awakenHero, awakenFodder, eventStatus, exchangeEvent,
     drillSkill, convertHero, convertValue, upgradeSkill, skillInvested, teamWounded, healTime,
     // 部隊
     teamCount, costCap, teamHeroes, teamBonus, teamCost, teamTroops, teamCapTroops, teamMinSta, teamSpeed, teamUnits, teamPower, teamReady,

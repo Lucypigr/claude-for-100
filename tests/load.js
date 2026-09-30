@@ -11,6 +11,6 @@ function load() {
   const root = path.join(__dirname, '..');
   for (const f of FILES) vm.runInContext(fs.readFileSync(path.join(root, f), 'utf8'), ctx, { filename: f });
   // 讓 top-level const/var 可被取用
-  return vm.runInContext('({U, CFG, SKILLS, HEROES, World, Battle, Game, AI, BUILDINGS, QUESTS, TERRAIN, CHAT})', ctx);
+  return vm.runInContext('({U, CFG, SKILLS, HEROES, EVENT_SKILLS, HERO_BY_NAME, World, Battle, Game, AI, BUILDINGS, QUESTS, TERRAIN, CHAT})', ctx);
 }
 module.exports = { load };

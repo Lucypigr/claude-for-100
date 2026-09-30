@@ -16,6 +16,8 @@ var AI = (function () {
   const CR50 = { 5: 2.6, 6: 2.6, 7: 2.3, 8: 2.3, 9: 2.2, 10: 2.1 };
 
   function G() { return Game.G; }
+  // 地圖放大倍數：同盟選目標、鋪路、招人等「戰略距離」隨地圖等比放大
+  function MS() { return Math.max(1, World.N / 300); }
 
   function makeProfiles(n) {
     const out = [];
@@ -807,7 +809,7 @@ var AI = (function () {
     if (a.phase === 'siege') {
       const center = city.tiles[(city.tiles.length / 2) | 0];
       const d = World.dist(team.base, center);
-      if (d > 75) return -1;
+      if (d > 75 * MS()) return -1;
       // 集結：等待集結時間，讓大家同時抵達
       const eta = Game.marchTime(p, team, team.base, center);
       if (a.rallyAt && g.time + eta < a.rallyAt - 5) { team._hold = g.time; return -2; }
@@ -844,7 +846,7 @@ var AI = (function () {
       const damaged = Game.G.landSiege[i] ? 1.25 : 1; // 守軍已被消耗
       if (winP(perceived(p, ratio * damaged)) < 0.33) continue;
       const d = World.dist(i, team.base);
-      if (d > 60) continue;
+      if (d > 60 * MS()) continue;
       const v = -field[i] * 12 - d * 1.5;
       if (v > bs) { bs = v; best = i; }
     }
@@ -870,7 +872,7 @@ var AI = (function () {
     if (!g.invites) g.invites = [];
     if (g.invites.some(x => x.a === a.id)) return;
     const d = Math.hypot(World.X(u.cityTile) - World.X(leader.cityTile), World.Y(u.cityTile) - World.Y(leader.cityTile));
-    if (d > 70 || g.time < 90 || U.rnd() > 0.25) return;
+    if (d > 70 * MS() || g.time < 90 || U.rnd() > 0.25) return;
     g.invites.push({ a: a.id, t: g.time });
     Game.say(leader, 'world', '@' + u.name + ' ' + U.pick(['來我們〔' + a.name + '〕吧，就在你附近', '〔' + a.name + '〕誠邀主公加入，一起打城', '看你一個人開荒，要不要入〔' + a.name + '〕？', '兄弟入盟嗎？〔' + a.name + '〕缺人']));
     Game.notify(u.id, '〔' + a.name + '〕盟主 ' + leader.name + ' 邀請你加入同盟（點「同盟」查看）', 'good');
@@ -955,7 +957,8 @@ var AI = (function () {
       if (c.alliance === a.id || sameBloc(c.alliance, a.id)) continue;
       if (Game.cityLockedDay(c) > Game.day()) continue;
       const d = Math.hypot(c.cx - sx, c.cy - sy);
-      if (d > 85) continue;
+      // 一般城池只看附近；洛陽與司隸城池在大地圖上距離按比例放大，否則沒有同盟會去打
+      if (d > 85 * (c.type === 'luoyang' || World.states[c.state].type === 'center' ? MS() : 1)) continue;
       const garr = CFG.CITY_GARRISON[c.lvl];
       const need = c.alliance < 0 ? CP[c.lvl] * garr[0] * 0.9 : (Game.G.alliances[c.alliance].power / 60);
       if (str < need * (0.55 + leader.prof.skill * 0.3)) continue;
@@ -1277,11 +1280,11 @@ var AI = (function () {
     let to = null;
     if (a.enemy >= 0 && g.alliances[a.enemy] && !g.alliances[a.enemy].dead && g.alliances[a.enemy].members.length < CFG.ALLIANCE_MAX) to = g.alliances[a.enemy];
     if (!to) {
-      let bp = a.power * 0.8;
+      let bp = a.power * 0.4; // 大服同盟多半滿員：投靠任何一個還有空位、夠強的鄰盟
       for (const b of g.alliances) {
         if (b.dead || b.id === a.id || b.members.length >= CFG.ALLIANCE_MAX || sameBloc(b.id, a.id)) continue;
         const L = Game.P[b.leader];
-        if (World.dist(L.cityTile, p.cityTile) > 90) continue;
+        if (World.dist(L.cityTile, p.cityTile) > 90 * MS()) continue;
         if (b.power > bp) { bp = b.power; to = b; }
       }
     }
@@ -1317,7 +1320,7 @@ var AI = (function () {
       const L = Game.P[b.leader];
       if ((L.prof || {}).persona === 'overlord') continue;
       const d = World.dist(L.cityTile, p.cityTile);
-      if (d > 80) continue;
+      if (d > 80 * MS()) continue;
       if (d < bd) { bd = d; best = b; }
     }
     if (!best) return;
@@ -1340,7 +1343,7 @@ var AI = (function () {
     const u = Game.P[a.leader];
     const cands = Game.P.filter(q => {
       if (!q.ai || q.alliance === a.id || q.captor >= 0) return false;
-      if (World.dist(q.cityTile, u.cityTile) > 130) return false;
+      if (World.dist(q.cityTile, u.cityTile) > 130 * MS()) return false;
       if (q.alliance < 0) return !(q.prof.leader && mem(q).createAt !== undefined);
       const b = g.alliances[q.alliance];
       if (b.leader === q.id || persona(q) === 'overlord') return false;

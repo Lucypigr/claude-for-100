@@ -575,6 +575,8 @@ var UI = (function () {
       case 'leave': if (ask('確定退出同盟？')) { const r = Game.leaveAlliance(user); toast(r.ok ? '已退出同盟' : r.msg); refreshPanel(); } break;
       case 'cleartarget': { const a = G.alliances[user.alliance]; a.target = -1; a.field = null; a.pave = null; a.phase = ''; refreshPanel(); break; }
       case 'claim': { const q = QUESTS.find(x => x.id === d.q); const r = Game.claimQuest(user, q); toast(r.ok ? '領取獎勵：' + rewardText(q.reward) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
+      case 'olock': Mobile.lock(d.o).then(ok => { toast(ok ? '已鎖定' + (d.o === 'portrait' ? '直屏' : '橫屏') : '此瀏覽器不支援鎖定螢幕方向', ok ? 'good' : 'warn'); refreshPanel(true); }); break;
+      case 'ounlock': Mobile.unlock(); toast('已解除方向鎖定', 'info'); refreshPanel(true); break;
       case 'cardart': CardArt.set(el.checked); refreshPanel(); hudTeams(); break;
       case 'save': { const ok = Game.save(); saveMeta(); snapshot('manual').then(id => { toast(ok ? '已存檔' + (id ? '，並加入存檔紀錄' : '') : '存檔失敗（儲存空間不足）', ok ? 'good' : 'bad'); refreshPanel(true); }); break; }
       case 'histload': if (ask('讀取這份存檔紀錄？目前進度會先自動備份。')) { const id = +d.id; (main.started ? snapshot('backup') : Promise.resolve()).then(() => loadHist(id)); } break;
@@ -916,6 +918,7 @@ var UI = (function () {
     settings() {
       let h = '<div class="sec-t">存檔</div><button class="btn" data-act="save">立即存檔</button> <span class="muted">（每分鐘自動存檔；關閉頁面時天下暫停）</span>';
       h += '<div class="sec-t">存檔紀錄</div><div class="muted" style="font-size:12px;margin-bottom:4px">保留手動存檔（20 份）、每個遊戲日的自動備份（10 份）與重開賽季前的備份（5 份），可讀回任一份。</div><div id="save-hist" class="hist-list">讀取中…</div>';
+      if (typeof Mobile !== 'undefined' && Mobile.canLock) h += '<div class="sec-t">螢幕方向</div><div class="muted" style="font-size:12px;margin-bottom:4px">鎖定後轉動手機畫面也不會跟著旋轉（會進入全螢幕，離開全螢幕即解除）。' + (Mobile.locked ? '目前鎖定：' + (Mobile.locked === 'portrait' ? '直屏' : '橫屏') : '') + '</div><button class="btn small" data-act="olock" data-o="landscape">鎖定橫屏</button> <button class="btn small" data-act="olock" data-o="portrait">鎖定直屏</button> <button class="btn small dark" data-act="ounlock">解除鎖定</button>';
       h += '<div class="sec-t">遊戲速度</div><div class="muted">1× = 每真實秒過 1 遊戲分鐘。畫面右上可切換 1×/2×/5×/10×/20×。空白鍵暫停。</div>';
       h += '<div class="sec-t">操作</div><div class="muted">拖曳平移地圖・滾輪縮放・點擊土地查看/出征・WASD/方向鍵移動・H 回主城・Esc 關閉視窗</div>';
       if (typeof CardArt !== 'undefined') h += '<div class="sec-t">武將卡圖</div><label class="muted"><input type="checkbox" data-act="cardart"' + (CardArt.on ? ' checked' : '') + '> 顯示官網武將卡圖（執行時直接從《率土之濱》官網載入，只在這個瀏覽器生效，不存檔、不上傳）</label>';
@@ -994,5 +997,5 @@ var UI = (function () {
     return o;
   }
 
-  return { init, update, toast, openPanel, closeModal, saveMeta, snapshot, get user() { return user; } };
+  return { init, update, toast, openPanel, closeModal, closeTile, saveMeta, snapshot, get user() { return user; } };
 })();

@@ -136,6 +136,9 @@ var UI = (function () {
       const full = user.res[r] >= user.cap * 0.99;
       h += '<div class="res' + (full ? ' full' : '') + '" title="' + CFG.RES_NAME[r] + '：' + Math.floor(user.res[r]) + '/' + user.cap + '"><i class="ri ' + r + '">' + CFG.RES_SHORT[r] + '</i><b>' + U.fmt(user.res[r]) + '</b><small>+' + U.fmt(user.prod[r]) + '</small></div>';
     }
+    const rcap = CFG.reserveCap(user.b.recruit);
+    h += '<div class="res' + (user.reserve >= rcap * 0.99 ? ' full' : '') + '" title="預備兵：征兵需消耗預備兵（' + Math.floor(user.reserve) + '/' + rcap + '），募兵所可提高產量與上限"><i class="ri reserve">兵</i><b>' + U.fmt(user.reserve) + '</b><small>+' + U.fmt(CFG.reserveProd(user.b.recruit)) + '</small></div>';
+    h += '<div class="res" title="戰法點：用於升級戰法，可由武將轉化取得"><i class="ri skp">法</i><b>' + U.fmt(user.skp) + '</b></div>';
     h += '<div class="res" title="銅幣"><i class="ri copper">銅</i><b>' + U.fmt(user.copper) + '</b><small>+' + U.fmt(user.prod.copper) + '</small></div>';
     h += '<div class="res" title="金銖"><i class="ri gold">金</i><b>' + U.fmt(user.gold) + '</b><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
     $('#resbar').innerHTML = h;
@@ -146,15 +149,23 @@ var UI = (function () {
     const gx = U.clamp(Math.floor(Render.cam.cx), 0, World.N - 1), gy = U.clamp(Math.floor(Render.cam.cy), 0, World.N - 1);
     $('#coord').textContent = '(' + gx + ',' + gy + ') ' + World.states[Game.T.state[World.idx(gx, gy)]].name + (user.captor >= 0 ? '　⚠ 淪陷中' : G.time < user.protectEnd ? '　主城保護中' : '');
   }
+  const MARCH_NAME = { attack: '出征', return: '回城', move: '調動', garrison: '駐守', farm: '屯田', train: '練兵', sweep: '掃蕩' };
   function statusText(p, t) {
     if (t.rq) return ['recruit', '征兵 ' + U.fmtDur(t.rq.end - G.time)];
     if (t.status === 'march') {
       const m = G.marches.find(x => x.id === t.march);
-      if (m) return [m.type === 'return' ? 'back' : 'march', (m.type === 'attack' ? '出征' : m.type === 'return' ? '回城' : m.type === 'move' ? '調動' : '駐守') + ' ' + U.fmtDur(m.end - G.time)];
+      if (m) return [m.type === 'return' ? 'back' : 'march', (MARCH_NAME[m.type] || '駐守') + ' ' + U.fmtDur(m.end - G.time)];
     }
     if (t.status === 'garrison') return ['garrison', '駐守(' + World.X(t.gtile) + ',' + World.Y(t.gtile) + ')'];
+    if (t.status === 'train') return ['garrison', '練兵 ' + U.fmtDur(t.trainEnd - G.time)];
+    if (Game.isHome(p, t.base) && Game.teamWounded(p, t) > 0) return ['recruit', '治療 ' + U.fmtDur(Game.healTime(p, t))];
     if (t.base !== user.cityTile) return ['', '駐紮(' + World.X(t.base) + ',' + World.Y(t.base) + ')'];
+    if (Game.teamWounded(p, t) > 0) return ['recruit', '治療 ' + U.fmtDur(Game.healTime(p, t))];
     return ['', '待命'];
+  }
+  // 兵力條：實兵 + 傷兵（斜紋）
+  function troopBar(troops, wnd, cap, style) {
+    return '<div class="bar wb"' + (style ? ' style="' + style + '"' : '') + '><i style="width:' + (cap ? troops / cap * 100 : 0) + '%"></i>' + (wnd > 0 ? '<i class="w" style="width:' + (wnd / cap * 100) + '%"></i>' : '') + '</div>';
   }
   function hudTeams() {
     let h = '';
@@ -170,8 +181,9 @@ var UI = (function () {
         const tp = Game.tpl(x);
         return '<div class="mini-hero" style="background-color:' + FACTION_COLOR[tp.faction] + faceStyle(tp) + '">' + tp.name + '<span class="lv">Lv' + x.lv + ' ' + tp.troop + '</span></div>';
       }).join('') + '</div>';
-      h += '<div class="bar"><i style="width:' + (cap ? troops / cap * 100 : 0) + '%"></i></div>';
-      h += '<div class="tinfo"><span>兵 ' + U.fmt(troops) + '/' + U.fmt(cap) + '</span><span>體力 ' + Math.floor(Game.teamMinSta(user, t)) + '</span></div>';
+      const wnd = Game.teamWounded(user, t);
+      h += troopBar(troops, wnd, cap);
+      h += '<div class="tinfo"><span>兵 ' + U.fmt(troops) + '/' + U.fmt(cap) + (wnd > 0 ? ' <span class="wtxt">傷' + U.fmt(wnd) + '</span>' : '') + '</span><span>體力 ' + Math.floor(Game.teamMinSta(user, t)) + '</span></div>';
       h += '</div>';
     });
     $('#teampanel').innerHTML = h;
@@ -344,6 +356,8 @@ var UI = (function () {
       const city = World.cities[c];
       if (city.type === 'main') return Game.P[city.owner].name + ' 的主城';
       if (city.type === 'fort') return Game.P[city.owner].name + ' 的要塞';
+      if (city.type === 'camp') return Game.P[city.owner].name + ' 的營帳';
+      if (city.type === 'branch') return Game.P[city.owner].name + ' 的分城';
       return CFG.CITY_TYPE_NAME[city.type] + '・' + city.name + ' <small>Lv.' + city.lvl + '</small>';
     }
     if (T.terrain[i] === TERRAIN.MOUNTAIN) return '山脈';
@@ -366,7 +380,7 @@ var UI = (function () {
     }
     if (owner >= 0) {
       const o = Game.P[owner];
-      h += row('擁有者', '<span class="link" data-act="gotoplayer" data-pid="' + o.id + '">' + E(o.name) + '</span>' + (o.alliance >= 0 ? ' 〔' + E(G.alliances[o.alliance].name) + '〕' : ''));
+      h += row('擁有者', '<span class="link" data-act="gotoplayer" data-pid="' + o.id + '">' + E(o.name) + '</span>' + (o.title ? ' <span class="bad">[' + E(o.title) + ']</span>' : '') + (o.alliance >= 0 ? ' 〔' + E(G.alliances[o.alliance].name) + '〕' + (G.alliances[o.alliance].lord >= 0 && G.alliances[G.alliances[o.alliance].lord] ? '<span class="muted">（附庸〔' + E(G.alliances[G.alliances[o.alliance].lord].name) + '〕）</span>' : '') : ''));
     } else if (city && city.alliance >= 0) h += row('佔領同盟', '〔' + E(G.alliances[city.alliance].name) + '〕');
     else h += row('擁有者', '無主之地');
     if (!city) {
@@ -382,8 +396,10 @@ var UI = (function () {
       h += row('勢力', U.fmt(o.power) + '　領地 ' + o.landCount);
       if (o.captor >= 0) h += row('狀態', '<span class="bad">淪陷於 ' + E(Game.P[o.captor].name) + '</span>');
       if (G.time < o.protectEnd) h += row('保護', '<span class="good">免戰 ' + U.fmtDur(o.protectEnd - G.time) + '</span>');
-    } else if (city.type === 'fort') {
+    } else if (World.isOutpost(city) || city.type === 'branch') {
       h += row('耐久', Math.round(city.dur) + '/' + city.maxDur + (city.building > G.time ? '　建造中 ' + U.fmtDur(city.building - G.time) : ''));
+      if (city.type === 'camp' && city.expire) h += row('剩餘時間', U.fmtDur(Math.max(0, city.expire - G.time)));
+      if (city.type === 'branch') h += row('功能', '駐紮、征兵、治療傷兵；四資源 +' + CFG.BRANCH_OUTPUT + '/時');
     } else {
       h += row('耐久', Math.round(city.dur) + '/' + city.maxDur);
       if (city.alliance < 0) {
@@ -407,7 +423,9 @@ var UI = (function () {
     if (here.length) h += row('駐軍', here.slice(0, 4).join('、') + (here.length > 4 ? '…' : ''));
     h += '</div>';
     // 動作
-    if (tilePopMode === 'attack' || tilePopMode === 'garrison' || tilePopMode === 'move') {
+    if (tilePopMode === 'confirm-branch' || tilePopMode === 'confirm-relocate') {
+      h += buildConfirmHtml(i, tilePopMode === 'confirm-branch' ? 'branch' : 'relocate');
+    } else if (MARCH_NAME[tilePopMode]) {
       h += teamPickHtml(i, tilePopMode);
     } else {
       h += '<div class="acts">';
@@ -419,11 +437,17 @@ var UI = (function () {
         h += '<button class="btn" data-act="tp-mode" data-m="garrison">駐守</button>';
         if (Game.baseValid(user, i) && i !== user.cityTile) h += '<button class="btn" data-act="tp-mode" data-m="move">調動</button>';
         if (T.owner[i] === user.id && !city) {
-          h += '<button class="btn dark" data-act="abandon">放棄</button>';
-          h += '<button class="btn dark" data-act="fort" title="木6000 鐵3000 石8000 糧2000">建要塞</button>';
+          h += '<button class="btn green" data-act="tp-mode" data-m="farm" title="收取此地 ' + CFG.FARM_HOURS + ' 小時產量，消耗 ' + CFG.COST_FARM + ' 體力">屯田</button>';
+          h += '<button class="btn green" data-act="tp-mode" data-m="train" title="在此練兵 ' + CFG.TRAIN_MIN + ' 分鐘賺經驗，消耗 ' + CFG.COST_TRAIN + ' 體力">練兵</button>';
+          h += '<button class="btn red" data-act="tp-mode" data-m="sweep" title="攻打此地守軍賺經驗，土地不會失去，消耗 ' + CFG.COST_SWEEP + ' 體力">掃蕩</button>';
+          h += '<br><button class="btn dark" data-act="abandon">放棄</button>';
+          h += '<button class="btn dark" data-act="fort" title="' + costText(CFG.FORT_COST) + '">建要塞</button>';
+          h += '<button class="btn dark" data-act="camp" title="' + costText(CFG.CAMP_COST) + '，24 小時後拆除">建營帳</button>';
+          h += '<button class="btn dark" data-act="tp-mode" data-m="confirm-branch">建分城</button>';
+          h += '<button class="btn dark" data-act="tp-mode" data-m="confirm-relocate">遷城</button>';
         }
       }
-      if (city && city.type !== 'main' && city.type !== 'fort' && user.alliance >= 0 && G.alliances[user.alliance].leader === user.id && city.alliance !== user.alliance)
+      if (city && !World.isPlayerCity(city) && user.alliance >= 0 && G.alliances[user.alliance].leader === user.id && city.alliance !== user.alliance)
         h += '<button class="btn gold" data-act="settarget" data-c="' + city.id + '">設為同盟目標</button>';
       h += '</div>';
       if (!friendly && why) h += '<div class="why">' + why + '</div>';
@@ -438,25 +462,45 @@ var UI = (function () {
     if (w >= 0.3) return '<span class="est e2">危險</span>';
     return '<span class="est e1">極危</span>';
   }
-  function estWin(team, i) {
+  function moraleTag(m) { return '<span class="morale' + (m < 80 ? ' low' : '') + '" title="士氣影響造成的傷害（' + Math.round(CFG.moraleDmg(m) * 100) + '%）。從越近的主城、要塞或同盟城池出發，士氣越高">士氣' + m + '</span>'; }
+  function estWin(team, i, sweep) {
     const T = Game.T;
-    const tp = Game.teamPower(user, team);
+    const tp = Game.teamPower(user, team) * CFG.moraleDmg(Game.marchMorale(user, team, i));
     const c = T.city[i];
     if (c < 0) {
-      if (T.owner[i] >= 0) return null;
+      if (T.owner[i] >= 0 && !sweep) return null;
       const L = T.lvl[i];
       return AI.winP(tp / (AI.GP[L] * AI.R50[L]));
     }
     const city = World.cities[c];
-    if (city.type === 'main' || city.type === 'fort' || city.alliance >= 0) return null;
+    if (World.isPlayerCity(city) || city.alliance >= 0) return null;
     const g = CFG.CITY_GARRISON[city.lvl];
     const first = city.garrison ? city.garrison.find(s => s.some(x => x > 0)) : [g[2], g[2], g[2]];
     if (!first) return 1;
     return AI.winP(tp / (Battle.power(Game.npcSquad(city.lvl, 3, g[1], first, 1, true)) * AI.CR50[city.lvl]));
   }
+  function costText(c) {
+    const nm = Object.assign({ gold: '金銖', copper: '銅幣' }, CFG.RES_SHORT);
+    return Object.keys(c).map(r => nm[r] + c[r]).join(' ');
+  }
+  function buildConfirmHtml(i, kind) {
+    const br = kind === 'branch';
+    const why = br ? Game.canBranch(user, i) : Game.canRelocate(user, i);
+    let h = '<div class="sec-t" style="margin:6px 10px">' + (br ? '建造分城' : '遷城') + '</div><div style="padding:0 10px 8px;font-size:13px">';
+    h += br ? '以此格為中心的 3×3 土地建成分城（需君王殿 ' + CFG.BRANCH_PALACE + ' 級、名望 15000；名望 50000 可建第二座；距主城至少 8 格），建造 ' + (CFG.BRANCH_BUILD_MIN / 60) + ' 小時。完成後可駐紮、征兵、治療傷兵，四資源各 +' + CFG.BRANCH_OUTPUT + '/時。'
+      : '把主城搬到以此格為中心的 3×3 土地，原主城處變回平地。所有部隊需待命，冷卻 ' + (CFG.RELOCATE_CD_MIN / 60) + ' 小時。';
+    h += costHtml(br ? CFG.BRANCH_COST : CFG.RELOCATE_COST);
+    if (why) h += '<div class="why">' + why + '</div>';
+    h += '<button class="btn gold small" data-act="' + kind + '"' + (why ? ' disabled' : '') + '>確定</button> <button class="btn small dark" data-act="tp-mode" data-m="info">返回</button></div>';
+    return h;
+  }
   function teamPickHtml(i, mode) {
-    const title = { attack: '選擇出征部隊', garrison: '選擇駐守部隊', move: '選擇調動部隊' }[mode];
+    const title = '選擇' + MARCH_NAME[mode] + '部隊';
     let h = '<div class="sec-t" style="margin:6px 10px">' + title + '</div><div class="teampick">';
+    const T = Game.T;
+    if (mode === 'farm') h += '<div class="muted" style="padding:0 10px;font-size:12px">抵達後獲得 ' + CFG.RES_NAME[CFG.RES[T.res[i]]] + ' ' + Game.farmYield(i) + '（此地 ' + CFG.FARM_HOURS + ' 小時產量），之後返回。</div>';
+    if (mode === 'train') h += '<div class="muted" style="padding:0 10px;font-size:12px">在此練兵 ' + CFG.TRAIN_MIN + ' 分鐘，每名武將每分鐘 +' + CFG.TRAIN_EXP[T.lvl[i]] + ' 經驗，不會損兵；土地等級越高經驗越多。</div>';
+    if (mode === 'sweep') h += '<div class="muted" style="padding:0 10px;font-size:12px">與此地守軍交戰賺經驗，土地不會失去；損失兵力照常計算。</div>';
     let any = false;
     user.teams.forEach((t, ti) => {
       const hs = Game.teamHeroes(user, t);
@@ -466,9 +510,10 @@ var UI = (function () {
       const eta = Game.marchTime(user, t, Game.baseValid(user, t.base) ? t.base : user.cityTile, i);
       const sta = Math.floor(Game.teamMinSta(user, t));
       const names = hs.filter(Boolean).map(x => Game.tpl(x).name).join('・');
-      h += '<div class="tp"><div>第' + (ti + 1) + '隊 ' + names + ' ' + (mode === 'attack' ? estLabel(estWin(t, i)) : '') + '</div>';
-      h += '<button class="btn small ' + (mode === 'attack' ? 'red' : '') + '" data-act="dispatch" data-ti="' + ti + '" data-m="' + mode + '"' + (ready ? '' : ' disabled') + '>' + (ready ? '出發' : statusText(user, t)[1]) + '</button>';
-      h += '<small>兵 ' + U.fmt(Game.teamTroops(user, t)) + '　體力 ' + sta + '　行軍 ' + U.fmtDur(eta) + '</small></div>';
+      h += '<div class="tp"><div>第' + (ti + 1) + '隊 ' + names + ' ' + (mode === 'attack' || mode === 'sweep' ? moraleTag(Game.marchMorale(user, t, i)) + ' ' + estLabel(estWin(t, i, mode === 'sweep')) : '') + '</div>';
+      h += '<button class="btn small ' + (mode === 'attack' || mode === 'sweep' ? 'red' : '') + '" data-act="dispatch" data-ti="' + ti + '" data-m="' + mode + '"' + (ready ? '' : ' disabled') + '>' + (ready ? '出發' : statusText(user, t)[1]) + '</button>';
+      const wnd = Game.teamWounded(user, t);
+      h += '<small>兵 ' + U.fmt(Game.teamTroops(user, t)) + (wnd > 0 ? ' <span class="wtxt">(傷' + U.fmt(wnd) + ')</span>' : '') + '　體力 ' + sta + '　行軍 ' + U.fmtDur(eta) + '</small></div>';
     });
     if (!any) h += '<div class="muted">沒有可用部隊，請先到「部隊」配置武將。</div>';
     h += '<button class="btn small dark" data-act="tp-mode" data-m="info">返回</button></div>';
@@ -500,19 +545,22 @@ var UI = (function () {
         const ti = +d.ti; selTeam = ti;
         const t = user.teams[ti];
         if (t.status === 'march') { const m = G.marches.find(x => x.id === t.march); if (m) { const [gx, gy] = Game.marchPos(m, G.time); Render.cam.cx = gx; Render.cam.cy = gy; } }
-        else if (t.status === 'garrison') goto(t.gtile);
+        else if (t.status === 'garrison' || t.status === 'train') goto(t.gtile);
         else openPanel('teams');
         break;
       }
       case 'tp-mode': tilePopMode = d.m; renderTilePop(); break;
       case 'dispatch': {
         const r = Game.send(user, +d.ti, tileSel, d.m);
-        if (r.ok) { toast('第' + (+d.ti + 1) + '部隊出發！預計 ' + U.fmtDur(r.march.end - G.time) + ' 後抵達', 'good'); tilePopMode = 'info'; closeTile(); }
+        if (r.ok) { toast('第' + (+d.ti + 1) + '部隊出發' + MARCH_NAME[d.m] + '！預計 ' + U.fmtDur(r.march.end - G.time) + ' 後抵達', 'good'); tilePopMode = 'info'; closeTile(); }
         else toast(r.msg, 'warn');
         break;
       }
       case 'abandon': if (ask('確定放棄這塊土地？')) { const r = Game.abandon(user, tileSel); toast(r.ok ? '已放棄土地' : r.msg, r.ok ? 'info' : 'warn'); renderTilePop(); } break;
-      case 'fort': { const r = Game.buildFort(user, tileSel); toast(r.ok ? '開始建造要塞（60 分鐘）' : r.msg, r.ok ? 'good' : 'warn'); renderTilePop(); break; }
+      case 'fort': { const r = Game.buildFort(user, tileSel); toast(r.ok ? '開始建造要塞（' + CFG.FORT_BUILD_MIN + ' 分鐘）' : r.msg, r.ok ? 'good' : 'warn'); renderTilePop(); break; }
+      case 'camp': { const r = Game.buildCamp(user, tileSel); toast(r.ok ? '開始搭建營帳（' + CFG.CAMP_BUILD_MIN + ' 分鐘，' + (CFG.CAMP_LIFE_MIN / 60) + ' 小時後拆除）' : r.msg, r.ok ? 'good' : 'warn'); renderTilePop(); break; }
+      case 'branch': { const r = Game.buildBranch(user, tileSel); toast(r.ok ? '開始建造分城（' + (CFG.BRANCH_BUILD_MIN / 60) + ' 小時）' : r.msg, r.ok ? 'good' : 'warn'); tilePopMode = 'info'; renderTilePop(); break; }
+      case 'relocate': { const r = Game.relocate(user, tileSel); if (r.ok) { toast('遷城完成！', 'good'); tilePopMode = 'info'; closeTile(); goto(user.cityTile, 56); } else toast(r.msg, 'warn'); break; }
       case 'settarget': {
         const a = G.alliances[user.alliance];
         a.target = +d.c; a.targetSince = G.time; a.phase = 'pave'; a.field = null;
@@ -545,12 +593,53 @@ var UI = (function () {
       case 'resetpt': Game.resetPoints(user, heroSel); refreshPanel(); break;
       case 'learn': { const r = Game.learnSkill(user, heroSel, +d.k, d.sid || null); if (!r.ok) toast(r.msg, 'warn'); panelArg = null; refreshPanel(); break; }
       case 'learnpick': panelArg = { learn: +d.k }; refreshPanel(); break;
+      case 'skup': { const r = Game.upgradeSkill(user, heroSel, +d.k); if (!r.ok) toast(r.msg, 'warn'); refreshPanel(); break; }
+      case 'convert': {
+        const h = Game.heroByUid(user, heroSel);
+        if (h && ask('轉化會消耗武將【' + Game.tpl(h).name + '】Lv' + h.lv + '，獲得 ' + Math.round(Game.convertValue(h)) + ' 戰法點。確定嗎？')) {
+          const r = Game.convertHero(user, heroSel);
+          toast(r.ok ? '獲得戰法點 ' + r.pts : r.msg, r.ok ? 'good' : 'warn');
+          if (r.ok) heroSel = 0;
+          refreshPanel();
+        }
+        break;
+      }
+      case 'drill': case 'drillhero': {
+        const sid = act === 'drill' ? d.sid : panelArg && panelArg.drill;
+        const h = Game.heroByUid(user, +d.uid);
+        if (!sid || !h) break;
+        if (Game.tpl(h).star >= 4 && !ask('確定消耗' + Game.tpl(h).star + '星武將【' + Game.tpl(h).name + '】演練【' + SKILLS[sid].name + '】？')) break;
+        const r = Game.drillSkill(user, sid, +d.uid);
+        if (!r.ok) toast(r.msg, 'warn');
+        else { toast(r.done ? '演練完成！學會戰法【' + SKILLS[sid].name + '】' : '【' + SKILLS[sid].name + '】演練進度 ' + Math.floor(r.prog) + '%', 'good'); if (r.done) panelArg = null; }
+        if (act === 'drill' && r.ok) heroSel = 0;
+        refreshPanel();
+        break;
+      }
+      case 'drillpick': panelArg = { drill: d.sid }; refreshPanel(); break;
+      case 'drillcancel': panelArg = null; refreshPanel(); break;
+      case 'awaken': {
+        const h = Game.heroByUid(user, heroSel);
+        if (!h) break;
+        const fs = Game.awakenFodder(user, h).sort((a, b) => Game.tpl(a).star - Game.tpl(b).star || a.lv - b.lv).slice(0, CFG.AWAKEN_FODDER);
+        if (!ask('覺醒【' + Game.tpl(h).name + '】將消耗：' + fs.map(x => Game.tpl(x).star + '★' + Game.tpl(x).name + ' Lv' + x.lv).join('、') + '。確定嗎？')) break;
+        const r = Game.awakenHero(user, heroSel, fs.map(x => x.uid));
+        toast(r.ok ? Game.tpl(h).name + ' 覺醒成功！' : r.msg, r.ok ? 'good' : 'warn');
+        refreshPanel(); break;
+      }
+      case 'event': {
+        const ev = EVENT_SKILLS.find(e => e.id === d.ev);
+        if (!ev || !ask('兌換【' + SKILLS[ev.skill].name + '】將消耗：' + ev.heroes.join('、') + '。確定嗎？')) break;
+        const r = Game.exchangeEvent(user, d.ev);
+        toast(r.ok ? '學會事件戰法【' + SKILLS[r.skill].name + '】' : r.msg, r.ok ? 'good' : 'warn');
+        refreshPanel(); break;
+      }
       case 'advance': { const r = Game.advanceHero(user, heroSel, +d.f); toast(r.ok ? '進階成功！獲得 10 點屬性點' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'inherit': {
         const h = Game.heroByUid(user, heroSel);
-        if (h && ask('傳承會消耗武將【' + Game.tpl(h).name + '】，並獲得其戰法【' + SKILLS[Game.tpl(h).inherit].name + '】。確定嗎？')) {
+        if (h && ask('傳承會消耗武將【' + Game.tpl(h).name + '】，並獲得其戰法【' + SKILLS[Game.tpl(h).inherit].name + '】的演練進度。確定嗎？')) {
           const r = Game.inheritHero(user, heroSel);
-          toast(r.ok ? '獲得戰法【' + SKILLS[r.skill].name + '】' : r.msg, r.ok ? 'good' : 'warn');
+          toast(r.ok ? (r.prog >= 100 ? '學會戰法【' + SKILLS[r.skill].name + '】' : '【' + SKILLS[r.skill].name + '】演練進度 ' + Math.floor(r.prog) + '%，到「戰法」頁演練') : r.msg, r.ok ? 'good' : 'warn');
           heroSel = 0; refreshPanel();
         }
         break;
@@ -732,7 +821,7 @@ var UI = (function () {
         const rc = Game.recruitCost(user, t, 1);
         h += '<div class="team-row"><div class="trh"><span class="trn">第' + '一二三四五'[ti] + '部隊　<span class="ts ' + cls + '" style="font-size:13px">' + st + '</span></span>';
         h += '<span>';
-        if (t.status === 'march' || t.status === 'garrison') h += '<button class="btn small dark" data-act="recall" data-ti="' + ti + '">撤回</button> ';
+        if (t.status === 'march' || t.status === 'garrison' || t.status === 'train') h += '<button class="btn small dark" data-act="recall" data-ti="' + ti + '">撤回</button> ';
         if (t.status === 'idle' && t.base !== user.cityTile) h += '<button class="btn small dark" data-act="teamhome" data-ti="' + ti + '">回主城</button> ';
         h += '<button class="btn small" data-act="autoteam" data-ti="' + ti + '">自動配將</button></span></div>';
         h += '<div style="display:flex;gap:14px;flex-wrap:wrap"><div class="slots">';
@@ -742,7 +831,7 @@ var UI = (function () {
           h += x ? heroCardHtml(x, { act: 'slot', extra: ' data-ti="' + ti + '" data-slot="' + s + '"', noTeam: true }) : '<div class="hcard empty" data-act="slot" data-ti="' + ti + '" data-slot="' + s + '">＋</div>';
           if (x) {
             const cap = Game.heroCap(user, x);
-            h += '<div class="bar" style="margin-top:3px"><i style="width:' + (x.troops / cap * 100) + '%"></i></div><div class="muted" style="font-size:11px;text-align:center">' + x.troops + '/' + cap + '　體力' + Math.floor(Game.getSta(x)) + '</div>';
+            h += troopBar(x.troops, x.wnd, cap, 'margin-top:3px') + '<div class="muted" style="font-size:11px;text-align:center">' + x.troops + '/' + cap + (x.wnd > 0 ? ' <span class="wtxt">傷' + x.wnd + '</span>' : '') + '　體力' + Math.floor(Game.getSta(x)) + '</div>';
           }
           h += '</div>';
         }
@@ -761,13 +850,15 @@ var UI = (function () {
           if (bonus.length) h += '<div><span>陣容加成</span><span class="good">' + bonus.join('、') + '</span></div>';
         }
         h += '</div>';
+        const wnd = Game.teamWounded(user, t);
+        if (wnd > 0) h += '<div class="wtxt" style="margin-top:6px;font-size:13px">傷兵 ' + U.fmtFull(wnd) + (t.status === 'idle' && Game.isHome(user, t.base) ? '：治療中，約 ' + U.fmtDur(Game.healTime(user, t)) + '（消耗少量資源）' : '：回主城或分城待命即可治療') + '</div>';
         if (Object.keys(rc.add).length) {
-          h += '<div class="sec-t" style="font-size:15px">征兵（補滿）</div>' + costHtml(rc.cost) + '<div class="muted" style="font-size:12px">需時 ' + U.fmtDur(rc.time) + '（資源不足時按比例征兵）</div>';
-          h += '<button class="btn green small" data-act="recruit" data-ti="' + ti + '"' + (t.status !== 'idle' || t.rq || t.base !== user.cityTile ? ' disabled' : '') + '>征兵</button>';
-        } else h += '<div class="good" style="margin-top:8px">兵力已滿</div>';
+          h += '<div class="sec-t" style="font-size:15px">征兵（補滿）</div>' + costHtml(rc.cost) + '<div class="cost"><span class="' + (user.reserve < rc.men ? 'no' : '') + '">預備兵 ' + U.fmt(rc.men) + '</span></div><div class="muted" style="font-size:12px">需時 ' + U.fmtDur(rc.time) + '（資源或預備兵不足時按比例征兵）</div>';
+          h += '<button class="btn green small" data-act="recruit" data-ti="' + ti + '"' + (t.status !== 'idle' || t.rq || !Game.isHome(user, t.base) ? ' disabled' : '') + '>征兵</button>';
+        } else h += '<div class="good" style="margin-top:8px">' + (wnd > 0 ? '其餘兵力已滿' : '兵力已滿') + '</div>';
         h += '</div></div></div>';
       });
-      h += '<div class="muted">提示：大營陣亡即戰敗。前鋒放防禦高的近戰武將，大營放攻擊距離遠的核心武將。三人同陣營或同兵種有額外加成。騎克步、步克弓、弓克騎。</div>';
+      h += '<div class="muted">提示：戰鬥損失的兵力約一半會成為<span class="wtxt">傷兵</span>，部隊回主城待命時自動治療，比征兵便宜且不耗預備兵。出征距離越遠士氣越低（6 格外每格 -1.5，最低 40），傷害隨之下降；善用要塞與同盟城池作為前線駐地。<br>大營陣亡即戰敗。前鋒放防禦高的近戰武將，大營放攻擊距離遠的核心武將。三人同陣營或同兵種有額外加成。騎克步、步克弓、弓克騎。</div>';
       return h;
     },
 
@@ -789,12 +880,36 @@ var UI = (function () {
     },
 
     skills() {
-      let h = '<div class="muted">戰法來源：武將自帶戰法、傳承（消耗三星以上武將獲得其自帶戰法）。武將 5 級開啟第二戰法欄、20 級開啟第三戰法欄。</div>';
+      let h = '<div class="muted">戰法來源：武將自帶戰法、傳承（消耗三星以上武將）。B 級戰法傳承即可學會；A 級傳承得 ' + CFG.INHERIT_PROG.A + '%、S 級得 ' + CFG.INHERIT_PROG.S + '% 演練進度，需消耗其他武將<b>演練</b>至 100% 才能學習。<br>戰法 1~10 級，效果 ' + Math.round(CFG.skillScale(1) * 100) + '%~100%，以<b>戰法點</b>升級；戰法點來自<b>轉化</b>武將與每日發放。武將 5 級開啟第二戰法欄、20 級或覺醒後開啟第三戰法欄。</div>';
+      h += '<div class="sec-t">戰法點 ' + U.fmtFull(user.skp) + '</div>';
+      const drills = Object.keys(user.libp);
+      h += '<div class="sec-t">事件戰法</div><div class="muted" style="font-size:12px">集齊指定武將（需未上陣，兌換時消耗）即可直接學會，不需演練。</div>';
+      for (const ev of EVENT_SKILLS) {
+        const sk = SKILLS[ev.skill];
+        if (!sk) continue;
+        const st = Game.eventStatus(user, ev);
+        h += '<div class="drill"><span style="min-width:88px">' + ev.name + '</span><span class="q-' + sk.q + '" style="min-width:80px" title="' + E(sk.desc) + '">【' + sk.name + '】</span><span style="flex:1">' + ev.heroes.map(n => '<span class="' + (st.missing.includes(n) ? 'muted' : 'good') + '">' + n + '</span>').join('、') + '</span>' +
+          (st.done ? '<span class="good">已擁有</span>' : '<button class="btn small gold" data-act="event" data-ev="' + ev.id + '"' + (st.missing.length ? ' disabled' : '') + '>兌換</button>') + '</div>';
+      }
+      h += '<div class="sec-t">研究中（演練）</div>';
+      if (!drills.length) h += '<div class="muted">沒有研究中的戰法。傳承 A/S 級戰法後會出現在這裡。</div>';
+      for (const sid of drills) {
+        const sk = SKILLS[sid];
+        h += '<div class="drill"><span class="q-' + sk.q + '" style="min-width:88px">' + sk.name + '</span><div class="bar"><i style="width:' + user.libp[sid] + '%"></i></div><span>' + Math.floor(user.libp[sid]) + '%</span><button class="btn small" data-act="drillpick" data-sid="' + sid + '">演練</button></div>';
+      }
+      if (panelArg && panelArg.drill && user.libp[panelArg.drill] !== undefined) {
+        const sid = panelArg.drill;
+        const idle = user.heroes.filter(x => x.team < 0).sort((a, b) => Game.tpl(a).star - Game.tpl(b).star || a.lv - b.lv);
+        h += '<div class="sec-t" style="font-size:15px">選擇演練素材：【' + SKILLS[sid].name + '】 <button class="btn small dark" data-act="drillcancel">取消</button></div>';
+        h += '<div class="muted" style="font-size:12px">每名武將依星級增加進度：' + [1, 2, 3, 4, 5].map(k => k + '★ +' + CFG.DRILL_PROG[k] + '%').join('　') + '（素材武將會被消耗）</div>';
+        h += '<div class="picker">' + (idle.map(x => heroCardHtml(x, { act: 'drillhero', noTeam: true })).join('') || '<div class="muted">沒有閒置武將</div>') + '</div>';
+      }
+      h += '<div class="sec-t">已學會</div>';
       h += '<table class="tbl" style="margin-top:8px"><tr><th>戰法</th><th>類型</th><th>品質</th><th>說明</th><th>使用武將</th></tr>';
       const TY = { active: '主動', passive: '被動', command: '指揮', pursuit: '追擊' };
       for (const sid of user.lib) {
         const s = SKILLS[sid];
-        const users = user.heroes.filter(x => x.sk.includes(sid)).map(x => Game.tpl(x).name);
+        const users = user.heroes.filter(x => x.sk.includes(sid)).map(x => Game.tpl(x).name + ' Lv' + (x.sl[x.sk.indexOf(sid)] || 1));
         h += '<tr><td class="q-' + s.q + '">' + s.name + '</td><td>' + TY[s.type] + (s.chance ? ' ' + Math.round(s.chance * 100) + '%' : '') + (s.prep ? ' 準備' + s.prep : '') + '</td><td class="q-' + s.q + '">' + s.q + '</td><td>' + s.desc + (s.troops ? '（限' + s.troops.join('/') + '）' : '') + '</td><td class="muted">' + (users.join('、') || '-') + '</td></tr>';
       }
       return h + '</table>';
@@ -813,7 +928,7 @@ var UI = (function () {
         h += '<div class="sec-t">' + E(cur.target) + ' <span class="link" data-act="gototile" data-tile="' + cur.tile + '">(' + World.X(cur.tile) + ',' + World.Y(cur.tile) + ')</span>　<span class="' + (cur.win ? 'good' : 'bad') + '">' + E(cur.result) + '</span></div>';
         cur.battles.forEach((b, k) => {
           h += '<div class="bside"><div class="col">' + b.A.slice().sort((x, y) => y.slot - x.slot).map(bu).join('') + '</div><div class="vs">VS</div><div class="col">' + b.D.slice().sort((x, y) => x.slot - y.slot).map(bu).join('') + '</div></div>';
-          h += '<div class="muted" style="text-align:center">第 ' + (k + 1) + ' 場：對陣 ' + E(b.def) + '　' + (b.winner === 'atk' ? '<span class="good">進攻方勝</span>' : b.winner === 'def' ? '<span class="bad">防守方勝</span>' : '<span class="warn">平局</span>') + '（' + b.rounds + ' 回合）</div>';
+          h += '<div class="muted" style="text-align:center">第 ' + (k + 1) + ' 場：對陣 ' + E(b.def) + '　' + (b.winner === 'atk' ? '<span class="good">進攻方勝</span>' : b.winner === 'def' ? '<span class="bad">防守方勝</span>' : '<span class="warn">平局</span>') + '（' + b.rounds + ' 回合）' + (b.morale !== undefined && b.morale < 100 ? '　進攻方' + moraleTag(b.morale) : '') + '</div>';
           if (b.log && b.log.length) h += '<div class="blog">' + b.log.map(l => '<div class="' + l.c + '">' + E(l.t) + '</div>').join('') + '</div>';
         });
       } else h += '<div class="muted">選擇一份戰報查看詳情</div>';
@@ -897,7 +1012,7 @@ var UI = (function () {
       h += '<div class="stats-grid">';
       h += '<div><span>賽季進度</span><span>第 ' + (d + 1) + ' / ' + CFG.SEASON_DAYS + ' 天</span></div>';
       h += '<div><span>洛陽</span><span>' + (ly.alliance >= 0 ? '〔' + E(G.alliances[ly.alliance].name) + '〕堅守 ' + U.fmtDur(G.time - ly.holdSince) + '/48時' : (Game.cityLockedDay(ly) > d ? '第 15 天開放' : '無主')) + '</span></div>';
-      h += '<div><span>已被佔領城池</span><span>' + World.cities.filter(c => c.type !== 'main' && c.type !== 'fort' && c.alliance >= 0).length + '</span></div>';
+      h += '<div><span>已被佔領城池</span><span>' + World.cities.filter(c => !World.isPlayerCity(c) && c.alliance >= 0).length + '</span></div>';
       h += '<div><span>存活同盟</span><span>' + G.alliances.filter(a => !a.dead).length + '</span></div></div>';
       h += '<div class="sec-t">勝利條件</div><div class="muted">① 佔領洛陽並堅守 48 小時，成就「霸業」，賽季提前結束。<br>② 第 ' + CFG.SEASON_DAYS + ' 天結算時，城池積分最高的同盟為本季霸主（縣城10、關口20、郡城30、州府100、洛陽500）。</div>';
       h += '<div class="sec-t">同盟積分</div><table class="tbl"><tr><th>#</th><th>同盟</th><th>積分</th><th>城池</th><th>人數</th></tr>';
@@ -927,13 +1042,56 @@ var UI = (function () {
     },
 
     help() {
+      const L = s => '<div class="sec-t">' + s + '</div>';
       return '<div style="line-height:1.9">' +
-        '<div class="sec-t">一、開荒</div>・點擊主城周圍的土地，選「出征」派部隊佔領。只能攻打與<b>自己或同盟領地相鄰</b>的土地。<br>・土地等級越高，守軍越強、產量越高。先打 1~3 級地讓武將升級，再挑戰高級地。<br>・領地數量受<b>名望</b>限制；首次佔領土地、升級建築可提高名望。領地滿了就放棄低級地換高級地。' +
-        '<div class="sec-t">二、內政</div>・「主城」升級建築：資源建築提高產量、校場增加部隊、兵營提高帶兵、統帥廳提高統御、倉庫提高存量。<br>・君王殿升級需要四種資源建築達到一定等級。' +
-        '<div class="sec-t">三、武將與部隊</div>・每支部隊 3 名武將：<b>大營</b>（陣亡即敗）、中軍、前鋒。統御(cost)總和不可超過上限。<br>・兵種克制：騎克步、步克弓、弓克騎。同陣營或同兵種三人有加成。<br>・戰鬥：準備回合發動指揮/被動戰法，之後 8 回合依速度行動；8 回合未分勝負為平局。<br>・戰鬥損失兵力需回主城「征兵」補充（消耗木、鐵、糧）。出征消耗 20 體力，每小時恢復 20。' +
-        '<div class="sec-t">四、同盟與攻城</div>・加入同盟後，同盟領地也可作為進攻起點。盟主設定目標後，全盟<b>鋪路</b>至城池旁，再集結攻城。<br>・攻城：先擊敗城池守軍（60 分鐘內未攻下守軍會恢復），再用兵力拆除耐久，歸零即佔領。<br>・城池提供同盟全員產量加成與賽季積分。' +
-        '<div class="sec-t">五、賽季</div>・第 1~3 天開荒（主城保護）；第 4 天開放出生州關口；第 9 天開放司隸；第 15 天開放洛陽。<br>・佔領洛陽並堅守 48 小時即成就霸業；或於第 30 天依同盟積分決定霸主。' +
-        '<div class="sec-t">六、AI 主公</div>・天下共有 150 位 AI 主公，有新手、休閒、普通、老手與課長，會開荒、結盟、鋪路、攻城、搶地、報復，也會在頻道聊天。你在線時他們與你同時行動。</div>';
+        L('一、開荒') +
+        '・點擊主城周圍的土地，選「出征」派部隊佔領。只能攻打與<b>自己或同盟領地相鄰</b>的土地；跨州要經過<b>關口</b>。<br>' +
+        '・土地 1~9 級，等級越高守軍越強、產量越高（6 級以上有兩隊守軍）。先打 1~3 級地讓武將升級，再挑戰高級地；出征選單會標示勝算與士氣。<br>' +
+        '・領地數量受<b>名望</b>限制；首次佔領土地、升級建築、參與攻城可提高名望。領地滿了就「放棄」低級地換高級地。<br>' +
+        '・前 ' + CFG.PROTECT_DAYS + ' 天主城受新手保護，別人打不了你。' +
+        L('二、內政建築') +
+        '・「主城」頁升級建築：伐木場/煉鐵場/採石場/農場提高產量，民居產銅幣，倉庫提高存量，校場增加部隊（最多 5 支），兵營提高帶兵上限，統帥廳提高統御，城牆提高主城耐久與城防，尚武/鐵壁/軍機/疾風營提升全武將屬性。<br>' +
+        '・君王殿決定其他建築上限，升級需要四種資源建築達到一定等級。建造隊列同時 2 個。<br>' +
+        '・<b>預備兵</b>：征兵要消耗預備兵，由<b>募兵所</b>每小時產出（' + CFG.reserveProd(0) + ' + 400×等級），並有上限。' +
+        L('三、經濟行動（在自己的土地上點選）') +
+        '・<b>屯田</b>：派部隊到自己的土地，抵達後一次收取該地 ' + CFG.FARM_HOURS + ' 小時產量，消耗 ' + CFG.COST_FARM + ' 體力。缺哪種資源就屯哪種地。<br>' +
+        '・<b>練兵</b>：部隊在自己的土地練兵 ' + CFG.TRAIN_MIN + ' 分鐘，每分鐘獲得經驗（土地越高級越多），不會損兵，消耗 ' + CFG.COST_TRAIN + ' 體力。<br>' +
+        '・<b>掃蕩</b>：攻打自己土地的守軍賺經驗，土地不會丟，但損兵照算，消耗 ' + CFG.COST_SWEEP + ' 體力。滿地時練武將的好方法。' +
+        L('四、據點：要塞・營帳・分城・遷城') +
+        '・<b>要塞</b>：在自己的土地建造（' + CFG.FORT_BUILD_MIN + ' 分鐘，最多 ' + CFG.FORT_MAX + ' 座），部隊可「調動」過去駐紮、從那裡出征。<br>' +
+        '・<b>營帳</b>：便宜、' + CFG.CAMP_BUILD_MIN + ' 分鐘搭好的臨時駐地（最多 ' + CFG.CAMP_MAX + ' 座），' + (CFG.CAMP_LIFE_MIN / 60) + ' 小時後自動拆除，適合臨時推進。<br>' +
+        '・<b>分城</b>：以自己的一格為中心、周圍 3×3 都是自己的空地時可建（君王殿 ' + CFG.BRANCH_PALACE + ' 級、名望 15000；名望 50000 可建第二座；距主城至少 8 格，建造 ' + (CFG.BRANCH_BUILD_MIN / 60) + ' 小時）。分城可駐紮、<b>征兵、治療傷兵</b>，四資源各 +' + CFG.BRANCH_OUTPUT + '/時，那 9 格也不再佔領地名額。會被敵人攻打摧毀。<br>' +
+        '・<b>遷城</b>：把主城搬到 3×3 都是自己空地的位置（金銖 ' + CFG.RELOCATE_COST.gold + '、銅幣 ' + CFG.RELOCATE_COST.copper + '，冷卻 ' + (CFG.RELOCATE_CD_MIN / 60) + ' 小時，所有部隊需待命）。' +
+        L('五、武將') +
+        '・「招募」抽武將：名將卡包用金銖，良將卡包用銅幣；五連抽保底四星。金銖每日發放 ' + CFG.DAILY_GOLD + '。<br>' +
+        '・武將每 10 級得 10 屬性點，加點可隨時<b>免費重置</b>。同名武將可<b>進階</b>（+10 屬性點，最多 5 次）。<br>' +
+        '・<b>覺醒</b>：四星以上武將消耗 3 名星級 ≥ 本身 -1 的閒置武將，立即開啟第三戰法欄、基礎屬性 +' + Math.round(CFG.AWAKEN_STAT * 100) + '%、再 +' + CFG.AWAKEN_POINTS + ' 屬性點。<br>' +
+        '・多餘武將可<b>轉化</b>為戰法點，或當作演練、覺醒、事件戰法的素材。' +
+        L('六、部隊與戰鬥') +
+        '・每支部隊 3 名武將：<b>大營</b>（陣亡即敗）、中軍、前鋒。統御(cost)總和不可超過上限。前鋒放耐打的近戰，大營放攻擊距離遠的核心。<br>' +
+        '・兵種克制：騎克步、步克弓、弓克騎。三人同陣營全屬性 +8%，三人同兵種攻防 +6%。<br>' +
+        '・戰鬥：準備回合發動指揮/被動戰法，之後最多 8 回合依速度行動（主動戰法 → 普攻 → 追擊戰法）；8 回合未分勝負為平局。<br>' +
+        '・<b>士氣</b>：從出發地（主城、分城、要塞、營帳、同盟城池）算距離，' + CFG.MORALE_FREE_TILES + ' 格外每格 -' + CFG.MORALE_PER_TILE + '，最低 ' + CFG.MORALE_MIN + '；士氣越低傷害越低（40 時只剩 58%）。遠征前先調動到前線據點。<br>' +
+        '・<b>傷兵</b>：損失的兵力約一半變傷兵，部隊在主城或分城待命時自動治療（便宜、不耗預備兵）；其餘要「征兵」補充。<br>' +
+        '・體力：出征、掃蕩消耗 20，屯田 30，每小時恢復 20。' +
+        L('七、戰法') +
+        '・戰法 1~10 級，以<b>戰法點</b>升級（1 級效果 ' + Math.round(CFG.skillScale(1) * 100) + '%、10 級 100%）。戰法點來自轉化武將與每日發放 ' + CFG.DAILY_SKP + '；更換或遺忘戰法返還 50%。<br>' +
+        '・武將 5 級開第二戰法欄，20 級或覺醒後開第三戰法欄。<br>' +
+        '・<b>傳承</b>三星以上武將取得其戰法：B/C/D 級直接學會，A 級 50%、S 級 25%，其餘需消耗其他武將<b>演練</b>至 100%。<br>' +
+        '・<b>事件戰法</b>：在「戰法」頁集齊指定武將兌換，直接學會。' +
+        L('八、同盟與攻城') +
+        '・加入同盟後，同盟領地也可作為進攻起點。盟主設定目標後，全盟<b>鋪路</b>至城池旁，再<b>集結</b>同時出兵。<br>' +
+        '・攻城：先擊敗城池守軍（' + CFG.GARRISON_RESET_MIN + ' 分鐘內未拆完耐久守軍會恢復），再用兵力拆除耐久，歸零即佔領。城池提供同盟全員產量加成與賽季積分。<br>' +
+        '・主城被攻破會<b>淪陷</b>，' + CFG.CAPTURE_HOURS + ' 小時內上繳 20% 資源。' +
+        L('九、賽季') +
+        '・第 1~3 天開荒（主城保護）；第 4 天開放出生州關口；第 9 天開放司隸；第 15 天開放洛陽。<br>' +
+        '・佔領洛陽並堅守 48 小時即成就霸業；或於第 30 天依同盟城池積分決定霸主。' +
+        L('十、AI 主公') +
+        '・天下共有 150 位 AI 主公，有新手、休閒、普通、老手與課長，會開荒、結盟、鋪路、攻城、搶地、報復、屯田練兵、建營帳分城，也會在頻道聊天。你在線時他們與你同時行動，離線時天下暫停。<br>' +
+        '・AI 各有<b>個性</b>：<b>火爆</b>的會跟鄰居結仇、在世界頻道互嗆並互搶地；每季有幾位<b>好戰者</b>專門打人、攻打主城；<b>叛徒</b>會在同盟交戰時倒戈投敵（標記 [叛徒]）；<b>龜縮</b>的只種田不打架；<b>梟雄</b>會收服附近弱盟為<b>附庸</b>，附庸聽其號令、跟打同一座城。<br>' +
+        '・<b>你當盟主時</b>，附近的 AI 會陸續申請加入你的同盟，並依你設定的目標鋪路、集結攻城（點城池選「設為同盟目標」）。小心盟裡混進叛徒。' +
+        L('操作') +
+        '・拖曳 / WASD / 方向鍵平移，滾輪或雙指縮放；H 回主城；空白鍵暫停；右上可調速度。</div>';
     },
 
     settle() {
@@ -964,36 +1122,60 @@ var UI = (function () {
     let o = '<div class="hd-top">' + heroCardHtml(h, { noTeam: true }) + '<div><div class="hd-name">' + t.name + '</div><div class="muted">' + '★'.repeat(t.star) + '　' + t.faction + '・' + t.troop + '兵　統御 ' + t.cost + '　攻擊距離 ' + t.range + '</div>' + (t.icon ? '' : '<div class="muted" style="font-size:11px">非官方武將（本作自訂數值）</div>');
     o += '<div>等級 ' + h.lv + (h.lv < CFG.HERO_MAX_LV ? '　<span class="muted">經驗 ' + Math.floor(h.exp) + '/' + CFG.expNeed(h.lv) + '</span>' : '　<span class="warn">已滿級</span>') + '</div>';
     o += '<div class="bar exp"><i style="width:' + (h.lv >= CFG.HERO_MAX_LV ? 100 : h.exp / CFG.expNeed(h.lv) * 100) + '%"></i></div>';
-    o += '<div class="muted" style="margin-top:3px">兵力 ' + h.troops + '/' + Game.heroCap(user, h) + '　體力 ' + Math.floor(Game.getSta(h)) + '/' + CFG.STAMINA_MAX + '</div>';
-    o += '<div class="muted">' + (h.team >= 0 ? '所屬：第' + (h.team + 1) + '部隊' : '未上陣') + (h.adv ? '　進階 ' + h.adv + '/5' : '') + '</div></div></div>';
+    o += '<div class="muted" style="margin-top:3px">兵力 ' + h.troops + '/' + Game.heroCap(user, h) + (h.wnd > 0 ? ' <span class="wtxt">傷兵 ' + h.wnd + '</span>' : '') + '　體力 ' + Math.floor(Game.getSta(h)) + '/' + CFG.STAMINA_MAX + '</div>';
+    o += '<div class="muted">' + (h.team >= 0 ? '所屬：第' + (h.team + 1) + '部隊' : '未上陣') + (h.adv ? '　進階 ' + h.adv + '/5' : '') + (h.awk ? '　<span class="good">已覺醒</span>' : '') + '</div></div></div>';
     o += '<div class="sec-t">屬性' + (fp > 0 ? ' <span class="good" style="font-size:13px">可分配 ' + fp + ' 點</span>' : '') + '</div>';
     for (const [k, n, g] of [['atk', '攻擊', 'atkG'], ['def', '防禦', 'defG'], ['int', '謀略', 'intG'], ['spd', '速度', 'spdG']]) {
       o += '<div class="attr"><span class="muted">' + n + '</span><span class="v">' + s[k].toFixed(1) + ' <span class="g">(+' + t[g] + '/級' + (h.pts[k] ? '，加點 ' + h.pts[k] : '') + ')</span></span><span>' + (fp > 0 ? '<button class="btn small pbtn" data-act="addpt" data-stat="' + k + '">+1</button> <button class="btn small pbtn" style="width:32px" data-act="addpt" data-stat="' + k + '" data-n="' + fp + '">+' + fp + '</button>' : '') + '</span></div>';
     }
     o += '<div class="attr"><span class="muted">攻城</span><span class="v">' + s.siege + ' <span class="g">(+' + (t.siegeG || 0) + '/級)</span></span><span></span></div>';
     if (h.pts.atk + h.pts.def + h.pts.int + h.pts.spd > 0) o += '<button class="btn small dark" data-act="resetpt">重置加點</button>';
-    o += '<div class="sec-t">戰法</div>';
+    o += '<div class="sec-t">戰法 <span class="muted" style="font-size:13px">戰法點 ' + U.fmtFull(user.skp) + '</span></div>';
     const TY = { active: '主動', passive: '被動', command: '指揮', pursuit: '追擊' };
     for (let k = 0; k < 3; k++) {
       const sid = h.sk[k];
       const unl = Game.slotUnlocked(h, k);
-      if (!unl) { o += '<div class="skslot locked"><span class="muted">' + (k === 1 ? '5 級解鎖' : '20 級解鎖') + '</span></div>'; continue; }
+      if (!unl) { o += '<div class="skslot locked"><span class="muted">' + (k === 1 ? '5 級解鎖' : '20 級或覺醒後解鎖') + '</span></div>'; continue; }
       if (sid) {
         const sk = SKILLS[sid];
-        o += '<div class="skslot"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + (sk.chance ? ' ' + Math.round(sk.chance * 100) + '%' : '') + '</span>' + (k === 0 ? '<span class="st" style="background:#6e2a1a">自帶</span>' : ' <button class="btn small dark" data-act="learnpick" data-k="' + k + '">更換</button> <button class="btn small dark" data-act="learn" data-k="' + k + '" data-sid="">遺忘</button>') + '<div class="sd">' + sk.desc + '</div></div>';
+        const lv = h.sl[k] || 1;
+        const up = lv < CFG.SKILL_MAX_LV ? CFG.skillUpCost(sk.q, lv) : 0;
+        o += '<div class="skslot"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="sklv">Lv' + lv + '/' + CFG.SKILL_MAX_LV + '　效果 ' + Math.round(CFG.skillScale(lv) * 100) + '%</span><span class="st">' + TY[sk.type] + (sk.chance ? ' ' + Math.round(sk.chance * 100) + '%' : '') + '</span>' + (k === 0 ? '<span class="st" style="background:#6e2a1a">自帶</span>' : ' <button class="btn small dark" data-act="learnpick" data-k="' + k + '">更換</button> <button class="btn small dark" data-act="learn" data-k="' + k + '" data-sid="">遺忘</button>') +
+          (up ? ' <button class="btn small ' + (user.skp >= up ? 'green' : '') + '" data-act="skup" data-k="' + k + '"' + (user.skp >= up ? '' : ' disabled') + '>升級（' + up + ' 點）</button>' : ' <span class="good" style="font-size:12px">已滿級</span>') +
+          '<div class="sd">' + sk.desc + '（數值為 10 級效果）</div></div>';
       } else o += '<div class="skslot"><button class="btn small" data-act="learnpick" data-k="' + k + '">學習戰法</button></div>';
     }
     if (panelArg && panelArg.learn) {
-      o += '<div class="sec-t" style="font-size:15px">選擇要學習的戰法</div>';
+      o += '<div class="sec-t" style="font-size:15px">選擇要學習的戰法</div><div class="muted" style="font-size:12px">新學的戰法從 1 級開始；更換或遺忘會返還原戰法 ' + Math.round(CFG.SKILL_REFUND * 100) + '% 已投入戰法點。</div>';
       const opts = user.lib.filter(id => !h.sk.includes(id)).map(id => SKILLS[id]).filter(sk => !sk.troops || sk.troops.includes(t.troop));
-      o += opts.map(sk => '<div class="skslot" style="cursor:pointer" data-act="learn" data-k="' + panelArg.learn + '" data-sid="' + sk.id + '"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span><div class="sd">' + sk.desc + '</div></div>').join('') || '<div class="muted">沒有可學習的戰法（可透過傳承獲得）</div>';
+      o += opts.map(sk => '<div class="skslot" style="cursor:pointer" data-act="learn" data-k="' + panelArg.learn + '" data-sid="' + sk.id + '"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span><div class="sd">' + sk.desc + '</div></div>').join('') || '<div class="muted">沒有可學習的戰法（可透過傳承獲得，A/S 級戰法需演練至 100%）</div>';
     }
     // 進階/傳承
     const dupes = user.heroes.filter(x => x !== h && x.t === h.t && x.team < 0);
-    o += '<div class="sec-t">進階・傳承</div>';
+    o += '<div class="sec-t">覺醒</div>';
+    if (h.awk) o += '<div class="good" style="font-size:13px">已覺醒：第三戰法欄開啟、基礎屬性 +' + Math.round(CFG.AWAKEN_STAT * 100) + '%、屬性點 +' + CFG.AWAKEN_POINTS + '</div>';
+    else if (t.star < CFG.AWAKEN_MIN_STAR) o += '<div class="muted" style="font-size:12px">四星以上武將才能覺醒。</div>';
+    else {
+      const fd = Game.awakenFodder(user, h);
+      o += '<div class="muted" style="font-size:12px">消耗 ' + CFG.AWAKEN_FODDER + ' 名 ' + (t.star - 1) + ' 星以上閒置武將（優先使用星級、等級最低者）：立即開啟第三戰法欄、基礎屬性 +' + Math.round(CFG.AWAKEN_STAT * 100) + '%、屬性點 +' + CFG.AWAKEN_POINTS + '。目前可用素材 ' + fd.length + ' 名。</div>';
+      o += '<button class="btn small gold" data-act="awaken"' + (fd.length >= CFG.AWAKEN_FODDER ? '' : ' disabled') + '>覺醒</button>';
+    }
+    o += '<div class="sec-t">進階・傳承・轉化</div>';
     if (dupes.length && h.adv < 5) o += '<button class="btn small gold" data-act="advance" data-f="' + dupes[0].uid + '">進階（消耗同名武將，+10 屬性點）</button> ';
     else o += '<span class="muted" style="font-size:12px">擁有同名武將時可進階。</span> ';
-    if (t.star >= 3 && h.team < 0) o += '<button class="btn small dark" data-act="inherit">傳承戰法【' + SKILLS[t.inherit].name + '】</button>';
+    if (h.team < 0) {
+      const sk0 = SKILLS[t.inherit];
+      if (t.star >= 3) {
+        if (user.lib.includes(t.inherit)) o += '<button class="btn small dark" disabled>已擁有【' + sk0.name + '】</button> ';
+        else o += '<button class="btn small dark" data-act="inherit">傳承【' + sk0.name + '】（演練 +' + CFG.INHERIT_PROG[sk0.q] + '%）</button> ';
+      }
+      o += '<button class="btn small dark" data-act="convert">轉化為戰法點（+' + Math.round(Game.convertValue(h)) + '）</button>';
+      const drills = Object.keys(user.libp);
+      if (drills.length) {
+        o += '<div class="muted" style="margin-top:6px;font-size:12px">作為演練素材（+' + CFG.DRILL_PROG[t.star] + '%）：</div>';
+        o += drills.map(sid => '<button class="btn small" style="margin:2px" data-act="drill" data-sid="' + sid + '" data-uid="' + h.uid + '">' + SKILLS[sid].name + ' ' + Math.floor(user.libp[sid]) + '%</button>').join('');
+      }
+    } else o += '<div class="muted" style="font-size:12px">武將下陣後才能傳承、轉化或作為演練素材。</div>';
     return o;
   }
 

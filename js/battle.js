@@ -11,13 +11,39 @@ var Battle = (function () {
 
   let rnd = Math.random;
 
-  // u: {name, faction, troop, troops, atk, def, int, spd, range, skills, slot}
+  // 依戰法等級縮放效果數值（傷害率、治療率、增減益、狀態強度），快取每個 (戰法, 等級)
+  const SCALED_V = { burn: 1, fear: 1, regen: 1, counter: 1, dmgDealt: 1, dmgTaken: 1, evade: 1, double: 1 };
+  const scaledCache = {};
+  function scaledSkill(id, lv) {
+    const base = SKILLS[id];
+    if (!base) return null;
+    lv = lv || CFG.SKILL_MAX_LV;
+    if (lv >= CFG.SKILL_MAX_LV) return base;
+    const key = id + '@' + lv;
+    if (scaledCache[key]) return scaledCache[key];
+    const sc = CFG.skillScale(lv);
+    const scale = fx => fx.map(f => {
+      const g = Object.assign({}, f);
+      if (f.k === 'dmg' || f.k === 'heal') g.rate = f.rate * sc;
+      else if (f.k === 'buff' || f.k === 'debuff') { if (f.v) g.v = f.v * sc; if (f.pct) g.pct = f.pct * sc; }
+      else if (f.k === 'st' && SCALED_V[f.st] && f.v !== undefined) g.v = f.v * sc;
+      return g;
+    });
+    const sk = Object.assign({}, base, { lv, fx: scale(base.fx) });
+    if (base.rfx) sk.rfx = scale(base.rfx);
+    scaledCache[key] = sk;
+    return sk;
+  }
+
+  // u: {name, faction, troop, troops, atk, def, int, spd, range, skills, skl(戰法等級), morale, slot}
   function prepUnit(u, side) {
+    const morale = u.morale === undefined ? 100 : u.morale;
     return {
       name: u.name, faction: u.faction, troop: u.troop, lv: u.lv || 1,
       troops: Math.max(0, Math.floor(u.troops)), start: Math.max(0, Math.floor(u.troops)), wounded: 0,
       b: { atk: u.atk, def: u.def, int: u.int, spd: u.spd }, range: u.range || 2,
-      skills: (u.skills || []).map(id => SKILLS[id]).filter(Boolean),
+      skills: (u.skills || []).map((id, k) => scaledSkill(id, u.skl ? u.skl[k] : 0)).filter(Boolean),
+      morale, mf: CFG.moraleDmg(morale),
       slot: u.slot, side, pos: 0, buffs: [], sts: [], prep: {}, ref: u.ref,
       dealt: 0, healed: 0,
     };
@@ -101,6 +127,7 @@ var Battle = (function () {
     if (TROOP_COUNTER[src.troop] === tgt.troop) dmg *= 1.15;
     else if (TROOP_COUNTER[tgt.troop] === src.troop) dmg *= 0.87;
     dmg *= Math.max(0.3, 1 + stSum(src, 'dmgDealt')) * Math.max(0.3, 1 + stSum(tgt, 'dmgTaken'));
+    dmg *= src.mf; // 士氣
     dmg *= 0.92 + rnd() * 0.16;
     return dmg;
   }
@@ -159,7 +186,7 @@ var Battle = (function () {
           t.sts = t.sts.filter(s => s.key !== key);
           const rec = { key, st: f.st, v: f.v, left: f.dur || 1 };
           if (f.st === 'burn' || f.st === 'fear') {
-            rec.dmg = Math.round(f.v * Math.sqrt(Math.max(1, u.troops)) * (stat(u, 'int') * 0.9 + 60) / K * (250 / (250 + stat(t, 'int') * 0.8)));
+            rec.dmg = Math.round(f.v * Math.sqrt(Math.max(1, u.troops)) * (stat(u, 'int') * 0.9 + 60) / K * (250 / (250 + stat(t, 'int') * 0.8)) * u.mf);
             rec.srcSide = u.side;
           }
           if (f.st === 'regen') rec.src = u;
@@ -282,6 +309,10 @@ var Battle = (function () {
     // 準備回合：指揮、被動
     ctx.round = 0;
     ctx.L('—— 準備回合 ——', 'round');
+    for (const S of [A, D]) {
+      const m = S[0].morale;
+      if (m < 100) ctx.L((S === A ? '【我】' : '【敵】') + '部隊士氣 ' + m + '，造成傷害 ' + Math.round(S[0].mf * 100) + '%', 'ctl');
+    }
     const all = A.concat(D).sort((a, b) => stat(b, 'spd') - stat(a, 'spd'));
     for (const u of all) for (const sk of u.skills) {
       if ((sk.type === 'command' || sk.type === 'passive') && sk.fx.length) castSkill(ctx, u, sk);
@@ -311,11 +342,11 @@ var Battle = (function () {
     for (const u of units) {
       if (!u || u.troops <= 0) continue;
       const main = Math.max(u.atk, u.int);
-      const sk = (u.skills || []).reduce((s, id) => s + (SKILLS[id] ? SKILL_VALUE[SKILLS[id].q] : 0), 0);
+      const sk = (u.skills || []).reduce((s, id, k) => s + (SKILLS[id] ? SKILL_VALUE[SKILLS[id].q] * (u.skl ? CFG.skillScale(u.skl[k]) : 1) : 0), 0);
       p += Math.pow(u.troops, 0.75) * (main * 0.9 + u.def * 0.6 + 60) * (1 + sk * 0.06);
     }
     return p / 100;
   }
 
-  return { simulate, power, SLOT_NAME, ST_NAME };
+  return { simulate, power, scaledSkill, SLOT_NAME, ST_NAME };
 })();

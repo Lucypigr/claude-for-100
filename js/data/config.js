@@ -2,6 +2,7 @@
 'use strict';
 
 var CFG = {
+  MAP_GEN_VER: 2,            // 地圖生成版本（新賽季使用）
   MAP_N: 300,               // 地圖邊長（格），150 位 AI 的標準大小
   // AI 越多地圖越大：維持每位主公可用面積約與 150 位時相同
   mapSizeFor: function (aiCount) { return aiCount <= 150 ? 300 : Math.round(300 * Math.sqrt((aiCount + 1) / 151) / 10) * 10; },

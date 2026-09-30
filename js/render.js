@@ -98,7 +98,7 @@ var Render = (function () {
     let owner = -1, alli = -1;
     if (c >= 0) {
       const city = World.cities[c];
-      if (city.type === 'main' || city.type === 'fort') { owner = city.owner; alli = owner >= 0 ? Game.P[owner].alliance : -1; }
+      if (World.isPlayerCity(city)) { owner = city.owner; alli = owner >= 0 ? Game.P[owner].alliance : -1; }
       else { alli = city.alliance; if (alli < 0) return null; }
     } else {
       owner = T.owner[i];
@@ -331,7 +331,7 @@ var Render = (function () {
 
   function terrKey(i) {
     const c = Game.T.city[i];
-    if (c >= 0) { const city = World.cities[c]; if (city.type === 'main' || city.type === 'fort') return 'p' + city.owner; return city.alliance >= 0 ? 'a' + city.alliance : ''; }
+    if (c >= 0) { const city = World.cities[c]; if (World.isPlayerCity(city)) return 'p' + city.owner; return city.alliance >= 0 ? 'a' + city.alliance : ''; }
     const o = Game.T.owner[i];
     return o >= 0 ? 'p' + o : '';
   }
@@ -427,31 +427,34 @@ var Render = (function () {
         if (rel === 'self') { ctx.fillStyle = '#6dff7a'; ctx.beginPath(); ctx.arc(sx, sy, 3.5, 0, 6.283); ctx.fill(); }
         continue;
       }
-      if (tw < 12 && !major && c.type !== 'main') {
+      if (tw < 12 && !major && c.type !== 'main' && c.type !== 'branch') {
         ctx.fillStyle = c.alliance >= 0 ? rgb(REL_COLOR[relOfAlli(c.alliance)]) : '#e8d8b0';
         ctx.fillRect(sx - 2, sy - 2, 4, 4);
         continue;
       }
       if (c.type === 'fort') { drawFort(c, sx, sy, hw, hh); continue; }
+      if (c.type === 'camp') { drawCamp(c, sx, sy, hw, hh); continue; }
       drawCitySprite(c, sx, sy, hw, hh, tw);
       // 標籤
-      const showLabel = c.type === 'main' ? tw >= 30 : (major || tw >= 14);
+      const pc = c.type === 'main' || c.type === 'branch';
+      const showLabel = pc ? tw >= 30 : (major || tw >= 14);
       if (showLabel) {
         let label = c.name, sub = '';
         let col = '#f4e7c5';
-        if (c.type === 'main') {
+        if (pc) {
           const o = Game.P[c.owner];
-          label = o.name;
+          label = o.name + (c.type === 'branch' ? '・分城' : '');
+          if (c.type === 'branch' && c.building > g.time) sub = '建造中';
           const rel = relOfPid(c.owner);
           col = rel === 'self' ? '#8dff95' : rel === 'ally' ? '#9cc4ff' : rel === 'free' ? '#ffe08a' : '#ff9a8a';
-          if (o.captor >= 0) sub = '淪陷';
+          if (c.type === 'main' && o.captor >= 0) sub = '淪陷';
         } else {
           sub = CFG.CITY_TYPE_NAME[c.type] + ' ' + c.lvl + '級';
           if (c.alliance >= 0) sub = '〔' + g.alliances[c.alliance].name + '〕';
         }
-        const fs = c.type === 'main' ? 11 : major ? Math.max(12, Math.min(20, tw * 0.35)) : 12;
+        const fs = pc ? 11 : major ? Math.max(12, Math.min(20, tw * 0.35)) : 12;
         ctx.font = (major ? 'bold ' : '') + fs + 'px "LXGW WenKai TC", "Noto Serif TC", serif';
-        const ly = sy - hh * c.size - (c.type === 'main' ? 10 : 16);
+        const ly = sy - hh * c.size - (pc ? 10 : 16);
         const wlab = ctx.measureText(label).width + 12;
         ctx.fillStyle = 'rgba(25,18,10,0.72)';
         roundRect(ctx, sx - wlab / 2, ly - fs * 0.7, wlab, fs * 1.4, 4); ctx.fill();
@@ -459,7 +462,7 @@ var Render = (function () {
         if (sub && (tw >= 14 || major)) {
           ctx.font = '10px "Noto Serif TC", serif';
           ctx.fillStyle = c.alliance >= 0 ? rgb(REL_COLOR[relOfAlli(c.alliance)]) : '#e6d3a3';
-          if (c.type === 'main' && sub) ctx.fillStyle = '#ff6a5a';
+          if (pc && sub) ctx.fillStyle = '#ff6a5a';
           ctx.fillText(sub, sx, ly + fs * 0.7 + 6);
         }
       }
@@ -472,9 +475,9 @@ var Render = (function () {
   function drawCitySprite(c, sx, sy, hw, hh, tw) {
     const s = c.size;
     const W2 = hw * s * 0.92, H2 = hh * s * 0.92;
-    const wallH = Math.max(3, tw * (c.type === 'main' ? 0.18 : 0.26));
+    const wallH = Math.max(3, tw * (c.type === 'main' || c.type === 'branch' ? 0.18 : 0.26));
     let flag = null;
-    if (c.type === 'main') flag = REL_COLOR[relOfPid(c.owner)];
+    if (c.type === 'main' || c.type === 'branch') flag = REL_COLOR[relOfPid(c.owner)];
     else if (c.alliance >= 0) flag = Game.G.userId >= 0 ? REL_COLOR[relOfAlli(c.alliance)] : null;
     // 城內地面
     diamond(ctx, sx, sy, W2, H2);
@@ -553,6 +556,21 @@ var Render = (function () {
     ctx.fillStyle = '#3a2a18'; ctx.fillRect(sx - 1, sy - s * 2.2, 1.5, s);
     if (c.building > Game.G.time && cam.tw >= 20) {
       ctx.font = '10px "Noto Serif TC", serif'; ctx.fillStyle = '#ffe08a'; ctx.fillText('建造中', sx, sy + hh);
+    }
+  }
+
+  function drawCamp(c, sx, sy, hw, hh) {
+    const col = REL_COLOR[relOfPid(c.owner)];
+    const s = Math.max(4, cam.tw * 0.26);
+    ctx.fillStyle = '#b89a62';
+    ctx.beginPath(); ctx.moveTo(sx - s, sy); ctx.lineTo(sx, sy - s * 1.4); ctx.lineTo(sx + s, sy); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#5a4428';
+    ctx.beginPath(); ctx.moveTo(sx - s * 0.25, sy); ctx.lineTo(sx, sy - s * 0.7); ctx.lineTo(sx + s * 0.25, sy); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = rgb(col);
+    ctx.fillRect(sx, sy - s * 2, s * 0.6, s * 0.4);
+    ctx.fillStyle = '#3a2a18'; ctx.fillRect(sx - 0.5, sy - s * 2, 1.2, s * 0.7);
+    if (c.building > Game.G.time && cam.tw >= 20) {
+      ctx.font = '10px "Noto Serif TC", serif'; ctx.fillStyle = '#ffe08a'; ctx.fillText('搭建中', sx, sy + hh);
     }
   }
 
@@ -716,7 +734,7 @@ var Render = (function () {
       c.fillStyle = '#fff3d6'; c.fillText(st.name, px, py);
     }
     for (const ct of World.cities) {
-      if (ct.type === 'main' || ct.type === 'fort' || ct.dead) continue;
+      if (World.isPlayerCity(ct) || ct.dead) continue;
       const px = ox + (ct.cx + 0.5 - ct.cy - 0.5) * hw, py = oy + (ct.cx + ct.cy + 1) * hh;
       const big = ct.type === 'capital' || ct.type === 'luoyang';
       c.fillStyle = ct.alliance >= 0 ? Game.G.alliances[ct.alliance].color : '#e8d8b0';

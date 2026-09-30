@@ -392,33 +392,59 @@ var World = (function () {
     W.cities.push(c);
     return c;
   }
-  // 將主城套用到地圖（新建與讀檔共用）
-  function applyMainCity(c) {
+  // 將 3×3 的玩家城（主城/分城）套用到地圖
+  function applyCityTiles(c) {
     const T = W.T;
-    const cx = c.cx, cy = c.cy;
     c.tiles = [];
-    for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+    for (let y = c.cy - 1; y <= c.cy + 1; y++) for (let x = c.cx - 1; x <= c.cx + 1; x++) {
       const i = idx(x, y);
       T.terrain[i] = TERRAIN.CITY;
       T.city[i] = c.id;
       T.owner[i] = c.owner;
       c.tiles.push(i);
     }
-    // 主城周圍降為低級地
+  }
+  // 移除 3×3 玩家城（分城被摧毀、遷城時舊址）：恢復為無主平地
+  function clearCityTiles(c) {
+    const T = W.T;
+    for (const i of c.tiles) { T.terrain[i] = TERRAIN.PLAIN; T.city[i] = -1; T.owner[i] = -1; }
+  }
+  // 將主城套用到地圖（新建與讀檔共用）
+  function applyMainCity(c) {
+    const T = W.T;
+    applyCityTiles(c);
+    // 出生點周圍降為低級地（遷城後仍以原出生點為準，讀檔結果一致）
+    const cx = c.hx === undefined ? c.cx : c.hx, cy = c.hy === undefined ? c.cy : c.hy;
     for (let y = cy - 5; y <= cy + 5; y++) for (let x = cx - 5; x <= cx + 5; x++) {
       if (!inb(x, y)) continue;
       const i = idx(x, y);
       if (T.terrain[i] !== TERRAIN.PLAIN) continue;
       const d = Math.max(Math.abs(x - cx), Math.abs(y - cy));
+      if (d <= 1) continue; // 出生點本身（主城 3×3）不調整，遷城後讀檔才會一致
       const cap = d <= 2 ? 2 : d <= 3 ? 3 : d <= 4 ? 4 : 5;
       if (T.lvl[i] > cap) T.lvl[i] = Math.max(1, cap - (((x * 7 + y * 13) % 3) === 0 ? 1 : 0));
     }
   }
-  function placeFort(tile, pid) {
+  function placeBranch(center, pid, name) {
     const T = W.T;
     const c = {
-      id: W.cities.length, type: 'fort', name: '要塞', lvl: T.lvl[tile], state: T.state[tile], cx: X(tile), cy: Y(tile), size: 1, tiles: [tile],
-      alliance: -1, owner: pid, dur: CFG.FORT_DUR, maxDur: CFG.FORT_DUR, garrison: null, resetAt: 0, capturedAt: -1, dead: false,
+      id: W.cities.length, type: 'branch', name, lvl: 0, state: T.state[center], cx: X(center), cy: Y(center), size: 3, tiles: [],
+      alliance: -1, owner: pid, dur: CFG.BRANCH_DUR, maxDur: CFG.BRANCH_DUR, garrison: null, resetAt: 0, capturedAt: -1, dead: false,
+    };
+    applyCityTiles(c);
+    W.cities.push(c);
+    return c;
+  }
+  // 玩家擁有的據點：主城、分城、要塞、營帳（歸屬看 owner，不看同盟）
+  const PCITY = { main: 1, branch: 1, fort: 1, camp: 1 };
+  function isPlayerCity(c) { return !!PCITY[c.type]; }
+  function isOutpost(c) { return c.type === 'fort' || c.type === 'camp'; }
+  function placeFort(tile, pid, type) {
+    const T = W.T;
+    type = type || 'fort';
+    const c = {
+      id: W.cities.length, type, name: type === 'camp' ? '營帳' : '要塞', lvl: T.lvl[tile], state: T.state[tile], cx: X(tile), cy: Y(tile), size: 1, tiles: [tile],
+      alliance: -1, owner: pid, dur: type === 'camp' ? CFG.CAMP_DUR : CFG.FORT_DUR, maxDur: type === 'camp' ? CFG.CAMP_DUR : CFG.FORT_DUR, garrison: null, resetAt: 0, capturedAt: -1, dead: false,
     };
     T.city[tile] = c.id;
     W.cities.push(c);
@@ -444,6 +470,7 @@ var World = (function () {
   W.regen = regen;
   W.idx = idx; W.X = X; W.Y = Y; W.inb = inb; W.neighbors8 = neighbors8; W.dist = dist;
   W.findSpawn = findSpawn; W.placeMainCity = placeMainCity; W.placeFort = placeFort; W.applyMainCity = applyMainCity;
+  W.placeBranch = placeBranch; W.applyCityTiles = applyCityTiles; W.clearCityTiles = clearCityTiles; W.isPlayerCity = isPlayerCity; W.isOutpost = isOutpost;
   W.linked = linked; W.isPassable = isPassable;
   W.D8 = D8;
   return W;

@@ -115,6 +115,7 @@ var AI = (function () {
     manageLands(p);
     // 要塞
     manageFort(p);
+    manageBranch(p);
     // 軍事
     military(p);
   }
@@ -414,9 +415,10 @@ var AI = (function () {
     v -= d * 0.05;
     return v;
   }
+  // 前線據點：老手蓋要塞，其他人蓋便宜的營帳
   function manageFort(p) {
     const pr = p.prof;
-    if (pr.skill < 0.55 || p.forts.length >= 1 || p.alliance < 0) return;
+    if (pr.skill < 0.3 || p.alliance < 0) return;
     const m = mem(p);
     if (G().time < (m.nextFort || 0)) return;
     m.nextFort = G().time + U.rint(90, 240);
@@ -425,14 +427,37 @@ var AI = (function () {
     const city = World.cities[a.target];
     const dMain = Math.hypot(city.cx - World.X(p.cityTile), city.cy - World.Y(p.cityTile));
     if (dMain < 26) return;
-    if (!Game.canAfford(p, CFG.FORT_COST)) return;
+    // 目標附近已有自己的據點就不再蓋
+    for (const id of p.forts.concat(p.branches || [])) { const f = World.cities[id]; if (!f.dead && Math.hypot(city.cx - f.cx, city.cy - f.cy) < 14) return; }
     let best = -1, bd = 1e9;
     for (const i of p.lands) {
       if (Game.T.city[i] >= 0) continue;
       const d = Math.hypot(city.cx - World.X(i), city.cy - World.Y(i));
       if (d < bd) { bd = d; best = i; }
     }
-    if (best >= 0 && bd < 12) Game.buildFort(p, best);
+    if (best < 0 || bd >= 12) return;
+    if (pr.skill >= 0.55 && Game.outpostCount(p, 'fort') < CFG.FORT_MAX && Game.canAfford(p, CFG.FORT_COST)) Game.buildFort(p, best);
+    else if (Game.canAfford(p, CFG.CAMP_COST)) Game.buildCamp(p, best);
+  }
+  // 分城：名望足夠的老手/課長，在靠近同盟目標（或離主城較遠）的 3×3 己方土地建分城
+  function manageBranch(p) {
+    const pr = p.prof;
+    if (pr.skill < 0.5 || CFG.branchMax(p.fame) <= (p.branches || []).length || p.b.palace < CFG.BRANCH_PALACE) return;
+    const m = mem(p);
+    if (G().time < (m.nextBranch || 0)) return;
+    m.nextBranch = G().time + U.rint(240, 600);
+    if (!Game.canAfford(p, CFG.BRANCH_COST)) return;
+    const a = p.alliance >= 0 ? Game.G.alliances[p.alliance] : null;
+    const tgt = a && a.target >= 0 ? World.cities[a.target] : null;
+    let best = -1, bs = -1e9;
+    const lands = p.lands;
+    for (let k = 0; k < Math.min(400, lands.length); k++) {
+      const i = lands[lands.length > 400 ? (U.rnd() * lands.length) | 0 : k];
+      if (Game.canBranch(p, i)) continue;
+      const v = tgt ? -Math.hypot(tgt.cx - World.X(i), tgt.cy - World.Y(i)) : World.dist(i, p.cityTile);
+      if (v > bs) { bs = v; best = i; }
+    }
+    if (best >= 0) Game.buildBranch(p, best);
   }
 
   // ================= 軍事 =================
@@ -495,8 +520,38 @@ var AI = (function () {
         if (!r.ok) continue;
       } else if (!atMain && ratio < 0.7) {
         Game.send(p, team.id, p.cityTile, 'move');
+      } else {
+        idleAction(p, team, tp); // 沒有目標時：屯田 / 掃蕩 / 練兵
       }
     }
+  }
+
+  // 閒置部隊：資源缺就屯田，否則掃蕩（打得過）或練兵賺經驗
+  function idleAction(p, team, tp) {
+    const pr = p.prof;
+    if (U.rnd() > 0.25 + pr.skill * 0.6) return false;
+    const T = Game.T;
+    let low = false;
+    for (const r of CFG.RES) if (p.res[r] < p.cap * 0.3) low = true;
+    let lvMax = 0;
+    for (const h of Game.teamHeroes(p, team)) if (h) lvMax = Math.max(lvMax, h.lv);
+    const want = low ? 'farm' : lvMax >= CFG.HERO_MAX_LV ? '' : (pr.skill > 0.45 ? 'sweep' : 'train');
+    if (!want) return false;
+    if (Game.teamMinSta(p, team) < (want === 'farm' ? CFG.COST_FARM : CFG.COST_SWEEP)) return false;
+    let best = -1, bs = -1e9;
+    const lands = p.lands;
+    for (let k = 0; k < Math.min(60, lands.length); k++) {
+      const i = lands[lands.length > 60 ? (U.rnd() * lands.length) | 0 : k];
+      if (T.city[i] >= 0) continue;
+      const d = World.dist(i, team.base);
+      if (d > 15) continue;
+      const L = T.lvl[i];
+      if (want === 'sweep' && winP(mtp(p, team, tp, i) / (GP[L] * R50[L])) < 0.8) continue;
+      const v = L * 10 - d;
+      if (v > bs) { bs = v; best = i; }
+    }
+    if (best < 0) return false;
+    return Game.send(p, team.id, best, want).ok;
   }
 
   let stamp = null, stampGen = 1;
@@ -517,6 +572,7 @@ var AI = (function () {
     let best = -1, bd = cur - 10;
     const cands = a.cities.map(cid => { const cc = World.cities[cid]; return cc.tiles[(cc.tiles.length / 2) | 0]; });
     for (const fid of p.forts) { const f = World.cities[fid]; if (!f.dead) cands.push(f.tiles[0]); }
+    for (const bid of (p.branches || [])) { const f = World.cities[bid]; if (!f.dead) cands.push(f.tiles[4]); }
     cands.push(p.cityTile);
     for (const b of cands) {
       if (b === team.base || !Game.baseValid(p, b)) continue;
@@ -827,7 +883,7 @@ var AI = (function () {
     const str = allianceStrength(a) / Math.max(1, a.members.length) * Math.min(a.members.length, 12);
     const cands = [];
     for (const c of World.cities) {
-      if (c.type === 'main' || c.type === 'fort' || c.dead) continue;
+      if (World.isPlayerCity(c) || c.dead) continue;
       if (c.alliance === a.id) continue;
       if (Game.cityLockedDay(c) > Game.day()) continue;
       const d = Math.hypot(c.cx - sx, c.cy - sy);

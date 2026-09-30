@@ -69,6 +69,32 @@ var CFG = {
   AWAKEN_FODDER: 3,
   AWAKEN_STAT: 0.08,
   AWAKEN_POINTS: 10,
+  // 營帳：便宜、建得快的臨時前線駐地，24 小時後自動拆除
+  CAMP_COST: { wood: 1500, iron: 500, stone: 1500, grain: 1000 },
+  CAMP_BUILD_MIN: 10,
+  CAMP_DUR: 800,
+  CAMP_LIFE_MIN: 24 * 60,
+  CAMP_MAX: 3,
+  FORT_MAX: 2,
+  // 分城：在 3×3 全為己方的土地上建造，可駐紮、征兵、治療傷兵，並提高產量
+  BRANCH_COST: { wood: 20000, iron: 20000, stone: 30000, grain: 10000 },
+  BRANCH_BUILD_MIN: 240,
+  BRANCH_DUR: 6000,
+  BRANCH_OUTPUT: 300,          // 每座分城四資源各 +300/時
+  BRANCH_PALACE: 5,            // 需要君王殿等級
+  branchMax: function (fame) { return fame >= 50000 ? 2 : fame >= 15000 ? 1 : 0; },
+  // 遷城：把主城搬到 3×3 全為己方的土地
+  RELOCATE_COST: { gold: 300, copper: 20000 },
+  RELOCATE_CD_MIN: 24 * 60,
+  // 屯田：派部隊到己方土地收取一次性資源（該地 3 小時產量），消耗 30 體力
+  FARM_HOURS: 3,
+  COST_FARM: 30,
+  // 練兵：部隊在己方土地練兵 60 分鐘，每分鐘獲得經驗（依土地等級），消耗 20 體力
+  TRAIN_MIN: 60,
+  TRAIN_EXP: [0, 4, 8, 14, 24, 40, 55, 70, 85, 100],
+  COST_TRAIN: 20,
+  // 掃蕩：攻打己方土地的守軍賺經驗（不改變歸屬），消耗 20 體力
+  COST_SWEEP: 20,
   // 行軍：每格分鐘數
   minPerTile: function (spd) { return 240 / (Math.max(20, spd) + 60); },
   // 攻城值
@@ -104,7 +130,7 @@ var CFG = {
     9: [10, 46, 8800, 30000],
     10: [12, 50, 10500, 60000],
   },
-  CITY_TYPE_NAME: { county: '縣城', commandery: '郡城', capital: '州府', luoyang: '都城', pass: '關口', main: '主城', fort: '要塞' },
+  CITY_TYPE_NAME: { county: '縣城', commandery: '郡城', capital: '州府', luoyang: '都城', pass: '關口', main: '主城', fort: '要塞', camp: '營帳', branch: '分城' },
   CITY_POINTS: { county: 10, commandery: 30, capital: 100, luoyang: 500, pass: 20 },
   GARRISON_RESET_MIN: 60,   // 60 分鐘內未拆完耐久，守軍恢復
   DUR_REGEN_PCT_H: 0.02,

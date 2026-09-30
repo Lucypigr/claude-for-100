@@ -263,7 +263,7 @@ var Game = (function () {
     const team = p.teams[ti];
     if (!team) return err('部隊不存在');
     if (team.status !== 'idle' || team.rq) return err('部隊忙碌中');
-    if (team.base !== p.cityTile) return err('需回到主城才能征兵');
+    if (!isHome(p, team.base)) return err('需回到主城或分城才能征兵');
     let rc = recruitCost(p, team, frac);
     if (!Object.keys(rc.add).length) {
       for (const h of teamHeroes(p, team)) if (h && h.wnd > 0) return err('傷兵治療中，無需征兵');
@@ -289,7 +289,7 @@ var Game = (function () {
   function healTick(p) {
     const rate = CFG.recruitRate(p.b.recruit) * CFG.HEAL_SPEED;
     for (const tm of p.teams) {
-      if (tm.status !== 'idle' || tm.base !== p.cityTile) continue;
+      if (tm.status !== 'idle' || !isHome(p, tm.base)) continue;
       for (const uid of tm.slots) {
         const h = heroByUid(p, uid);
         if (!h || !(h.wnd > 0)) continue;
@@ -353,6 +353,9 @@ var Game = (function () {
     const bmap = ['lumber', 'ironw', 'quarry', 'farm'];
     const prod = {};
     CFG.RES.forEach((r, k) => { prod[r] = Math.round((base + p.b[bmap[k]] * 150 + p.landProd[k]) * bonus); });
+    let nb = 0;
+    for (const id of (p.branches || [])) { const bc = World.cities[id]; if (!bc.dead && !(bc.building > G.time)) nb++; }
+    if (nb) CFG.RES.forEach(r => { prod[r] += Math.round(CFG.BRANCH_OUTPUT * nb * bonus); });
     prod.copper = 200 + p.b.house * 250;
     if (p.captor >= 0) for (const r of CFG.RES) prod[r] = Math.round(prod[r] * (1 - CFG.TRIBUTE_PCT));
     p.prod = prod;
@@ -512,14 +515,14 @@ var Game = (function () {
   function markDirty(i) { G.dirty.push(i); }
   function tileOwner(i) {
     const c = T.city[i];
-    if (c >= 0) { const city = World.cities[c]; if (city.type === 'main' || city.type === 'fort') return city.owner; return -1; }
+    if (c >= 0) { const city = World.cities[c]; if (World.isPlayerCity(city)) return city.owner; return -1; }
     return T.owner[i];
   }
   function tileAlliance(i) {
     const c = T.city[i];
     if (c >= 0) {
       const city = World.cities[c];
-      if (city.type === 'main' || city.type === 'fort') return city.owner >= 0 ? P[city.owner].alliance : -1;
+      if (World.isPlayerCity(city)) return city.owner >= 0 ? P[city.owner].alliance : -1;
       return city.alliance;
     }
     const o = T.owner[i];
@@ -558,7 +561,7 @@ var Game = (function () {
         if (G.time < o.protectEnd) return '對方主城處於保護期';
         if (o.captor === p.id) return '已淪陷於你';
       }
-      if (city.type !== 'main' && city.type !== 'fort') {
+      if (!World.isPlayerCity(city)) {
         if (day() < cityLockedDay(city)) return '尚未開放（第 ' + (cityLockedDay(city) + 1) + ' 天開放）';
         if (city.alliance < 0 && p.alliance < 0) return '需加入同盟才能攻城';
       }
@@ -603,17 +606,24 @@ var Game = (function () {
     setOwner(i, -1);
     return ok();
   }
-  function buildFort(p, i) {
-    if (T.owner[i] !== p.id || T.city[i] >= 0) return err('只能在自己的土地上建造要塞');
-    if (p.forts.length >= 2) return err('要塞數量已達上限（2）');
-    if (!canAfford(p, CFG.FORT_COST)) return err('資源不足');
-    pay(p, CFG.FORT_COST);
-    const c = World.placeFort(i, p.id);
-    c.building = G.time + CFG.FORT_BUILD_MIN;
+  function outpostCount(p, type) { let n = 0; for (const id of p.forts) if (World.cities[id].type === type) n++; return n; }
+  // 要塞 / 營帳（單格前線駐地，土地仍計入領地）
+  function buildFort(p, i, type) {
+    type = type || 'fort';
+    const camp = type === 'camp';
+    const nm = camp ? '營帳' : '要塞', max = camp ? CFG.CAMP_MAX : CFG.FORT_MAX, cost = camp ? CFG.CAMP_COST : CFG.FORT_COST;
+    if (T.owner[i] !== p.id || T.city[i] >= 0) return err('只能在自己的土地上建造' + nm);
+    if (outpostCount(p, type) >= max) return err(nm + '數量已達上限（' + max + '）');
+    if (!canAfford(p, cost)) return err('資源不足');
+    pay(p, cost);
+    const c = World.placeFort(i, p.id, type);
+    c.building = G.time + (camp ? CFG.CAMP_BUILD_MIN : CFG.FORT_BUILD_MIN);
+    if (camp) c.expire = c.building + CFG.CAMP_LIFE_MIN;
     p.forts.push(c.id);
     markDirty(i);
     return ok({ city: c });
   }
+  function buildCamp(p, i) { return buildFort(p, i, 'camp'); }
   function removeFort(c) {
     const p = P[c.owner];
     if (p) p.forts = p.forts.filter(x => x !== c.id);
@@ -623,6 +633,94 @@ var Game = (function () {
     // 駐紮其中的部隊撤回主城
     if (p) for (const tm of p.teams) if (tm.base === c.tiles[0] && tm.status === 'idle') { tm.base = p.cityTile; }
   }
+  // 3×3 範圍是否全為自己的空地（分城、遷城用）
+  function block3Owned(p, center) {
+    const x0 = World.X(center), y0 = World.Y(center);
+    for (let y = y0 - 1; y <= y0 + 1; y++) for (let x = x0 - 1; x <= x0 + 1; x++) {
+      if (!World.inb(x, y)) return false;
+      const i = World.idx(x, y);
+      if (T.owner[i] !== p.id || T.city[i] >= 0 || !World.isPassable(i)) return false;
+      for (const tm of p.teams) if (tm.gtile === i) return false;
+    }
+    return true;
+  }
+  function branchCount(p) { return (p.branches || []).length; }
+  function canBranch(p, i) {
+    if (p.b.palace < CFG.BRANCH_PALACE) return '需要君王殿 ' + CFG.BRANCH_PALACE + ' 級';
+    const max = CFG.branchMax(p.fame);
+    if (branchCount(p) >= max) return max === 0 ? '名望 15000 才能建造分城' : '分城數量已達上限（' + max + '，名望 50000 可建第二座）';
+    if (!block3Owned(p, i)) return '需以此格為中心、周圍 3×3 皆為自己的空地（無駐守部隊）';
+    if (World.dist(i, p.cityTile) < 8) return '距離主城太近（至少 8 格）';
+    if (!canAfford(p, CFG.BRANCH_COST)) return '資源不足';
+    return '';
+  }
+  function buildBranch(p, i) {
+    const why = canBranch(p, i);
+    if (why) return err(why);
+    pay(p, CFG.BRANCH_COST);
+    const x0 = World.X(i), y0 = World.Y(i);
+    for (let y = y0 - 1; y <= y0 + 1; y++) for (let x = x0 - 1; x <= x0 + 1; x++) setOwner(World.idx(x, y), -1);
+    const c = World.placeBranch(i, p.id, p.name + '分城');
+    c.building = G.time + CFG.BRANCH_BUILD_MIN;
+    if (!p.branches) p.branches = [];
+    p.branches.push(c.id);
+    for (const t of c.tiles) markDirty(t);
+    recompute(p);
+    return ok({ city: c });
+  }
+  function removeBranch(c) {
+    const p = P[c.owner];
+    if (p) p.branches = (p.branches || []).filter(x => x !== c.id);
+    World.clearCityTiles(c);
+    c.dead = true;
+    for (const t of c.tiles) markDirty(t);
+    if (p) {
+      for (const tm of p.teams) {
+        if (c.tiles.includes(tm.base)) { tm.base = p.cityTile; if (tm.status === 'idle') startReturn(p, tm, c.tiles[4]); }
+      }
+      recompute(p);
+    }
+  }
+  // 遷城
+  function canRelocate(p, i) {
+    if (p.captor >= 0) return '淪陷中無法遷城';
+    if (G.time < (p.relocateCd || 0)) return '遷城冷卻中（' + Math.ceil((p.relocateCd - G.time) / 60) + ' 小時）';
+    if (!block3Owned(p, i)) return '需以此格為中心、周圍 3×3 皆為自己的空地（無駐守部隊）';
+    for (const tm of p.teams) if (tm.status !== 'idle' || tm.rq) return '所有部隊需待命（不可出征、駐守或征兵）';
+    if (!canAfford(p, CFG.RELOCATE_COST)) return '需要金銖 ' + CFG.RELOCATE_COST.gold + '、銅幣 ' + CFG.RELOCATE_COST.copper;
+    return '';
+  }
+  function relocate(p, i) {
+    const why = canRelocate(p, i);
+    if (why) return err(why);
+    pay(p, CFG.RELOCATE_COST);
+    const c = World.cities[p.city];
+    const old = p.cityTile;
+    const x0 = World.X(i), y0 = World.Y(i);
+    for (let y = y0 - 1; y <= y0 + 1; y++) for (let x = x0 - 1; x <= x0 + 1; x++) setOwner(World.idx(x, y), -1);
+    World.clearCityTiles(c);
+    for (const t of c.tiles) markDirty(t);
+    if (c.hx === undefined) { c.hx = c.cx; c.hy = c.cy; }
+    c.cx = x0; c.cy = y0;
+    World.applyCityTiles(c);
+    for (const t of c.tiles) markDirty(t);
+    p.cityTile = i;
+    p.state = T.state[i];
+    c.state = T.state[i];
+    c.garrison = null;
+    for (const tm of p.teams) if (tm.base === old || !baseValid(p, tm.base)) tm.base = i;
+    p.relocateCd = G.time + CFG.RELOCATE_CD_MIN;
+    recompute(p);
+    return ok();
+  }
+  // 主城或已建成的己方分城（可征兵、治療）
+  function isHome(p, tile) {
+    if (tile === p.cityTile) return true;
+    const c = T.city[tile];
+    if (c < 0) return false;
+    const city = World.cities[c];
+    return city.type === 'branch' && city.owner === p.id && !city.dead && !(city.building > G.time);
+  }
 
   // ================= 行軍 =================
   function baseValid(p, tile) {
@@ -630,7 +728,7 @@ var Game = (function () {
     const c = T.city[tile];
     if (c < 0) return false;
     const city = World.cities[c];
-    if (city.type === 'fort') return city.owner === p.id && !city.dead && !(city.building > G.time);
+    if (World.isOutpost(city) || city.type === 'branch') return city.owner === p.id && !city.dead && !(city.building > G.time);
     if (city.type === 'main') return false;
     return p.alliance >= 0 && city.alliance === p.alliance;
   }
@@ -650,7 +748,8 @@ var Game = (function () {
     const base = heroByUid(p, team.slots[0]);
     if (!base) return err('部隊缺少大營武將');
     if (base.troops <= 0) return err('大營武將兵力不足');
-    const cost = type === 'attack' ? CFG.COST_ATTACK : type === 'move' ? CFG.COST_MOVE : CFG.COST_GARRISON;
+    const cost = { attack: CFG.COST_ATTACK, move: CFG.COST_MOVE, garrison: CFG.COST_GARRISON, farm: CFG.COST_FARM, train: CFG.COST_TRAIN, sweep: CFG.COST_SWEEP }[type];
+    if (cost === undefined) return err('無效行動');
     if (teamMinSta(p, team) < cost) return err('武將體力不足（需要 ' + cost + '）');
     if (!baseValid(p, team.base)) team.base = p.cityTile;
     if (type === 'attack') {
@@ -661,6 +760,9 @@ var Game = (function () {
       if (target === team.base) return err('部隊已在此處');
     } else if (type === 'garrison') {
       if (!isFriendly(p, target) || !World.isPassable(target)) return err('只能駐守我方或同盟領地');
+    } else {
+      // 屯田 / 練兵 / 掃蕩：只能在自己的土地上
+      if (T.owner[target] !== p.id || T.city[target] >= 0) return err('只能在自己的土地上' + ACT_NAME[type]);
     }
     const dist = World.dist(team.base, target);
     if (dist > 120) return err('距離過遠');
@@ -682,10 +784,11 @@ var Game = (function () {
     }
     return ok({ march: m });
   }
+  const ACT_NAME = { farm: '屯田', train: '練兵', sweep: '掃蕩' };
   function recall(p, ti) {
     const team = p.teams[ti];
     if (!team) return err('部隊不存在');
-    if (team.status === 'garrison') {
+    if (team.status === 'garrison' || team.status === 'train') {
       startReturn(p, team, team.gtile);
       return ok();
     }
@@ -758,9 +861,67 @@ var Game = (function () {
       else startReturn(p, team, m.to);
       return;
     }
+    if (m.type === 'farm' || m.type === 'train' || m.type === 'sweep') {
+      if (T.owner[m.to] !== p.id || T.city[m.to] >= 0) { startReturn(p, team, m.to); return; }
+      if (m.type === 'train') { team.status = 'train'; team.gtile = m.to; team.march = 0; team.trainEnd = G.time + CFG.TRAIN_MIN; return; }
+      if (m.type === 'farm') doFarm(p, team, m.to);
+      else resolveSweep(p, team, m.to, CFG.moraleAt(World.dist(m.from, m.to)));
+      if (team.status === 'march' && team.march === m.id) startReturn(p, team, m.to);
+      return;
+    }
     if (m.type === 'attack') {
       resolveAttack(p, team, m.to, CFG.moraleAt(World.dist(m.from, m.to)));
       if (team.status === 'march' && team.march === m.id) startReturn(p, team, m.to);
+    }
+  }
+
+  // ================= 屯田 / 練兵 / 掃蕩 =================
+  function farmYield(i) { return Math.round(CFG.LAND_OUTPUT[T.lvl[i]] * CFG.FARM_HOURS); }
+  function doFarm(p, team, i) {
+    const r = CFG.RES[T.res[i]], n = farmYield(i);
+    const before = p.res[r];
+    gain(p, { [r]: n });
+    const got = Math.round(p.res[r] - before);
+    p.stats.farmed = (p.stats.farmed || 0) + got;
+    if (p.id === G.userId) notify(p.id, '第' + (team.id + 1) + '部隊屯田完成：' + CFG.RES_NAME[r] + ' +' + got + (got < n ? '（倉庫已滿）' : ''), 'good');
+  }
+  function trainTick(p) {
+    for (const tm of p.teams) {
+      if (tm.status !== 'train') continue;
+      if (T.owner[tm.gtile] !== p.id || G.time >= tm.trainEnd) {
+        if (p.id === G.userId && G.time >= tm.trainEnd) notify(p.id, '第' + (tm.id + 1) + '部隊練兵結束，返回駐地', 'good');
+        startReturn(p, tm, tm.gtile);
+        continue;
+      }
+      const e = CFG.TRAIN_EXP[T.lvl[tm.gtile]];
+      for (const h of teamHeroes(p, tm)) if (h) gainExp(p, h, e);
+    }
+  }
+  // 掃蕩：與己方土地的守軍交戰賺經驗，土地歸屬不變
+  function resolveSweep(p, team, i, morale) {
+    const atkUnits = teamUnits(p, team, morale);
+    const g = CFG.GARRISON[T.lvl[i]];
+    const logIt = p.id === G.userId;
+    const targetName = CFG.RES_NAME[CFG.RES[T.res[i]]] + ' Lv.' + T.lvl[i];
+    const report = logIt ? { id: G.nextReport++, t: G.time, tile: i, target: targetName + '（掃蕩）', atkName: p.name, atkPid: p.id, defName: '守軍', battles: [], result: '', read: false } : null;
+    let won = true, kills = 0;
+    for (let sq = 0; sq < g[0] && won; sq++) {
+      if (!atkUnits.find(u => u.slot === 0 && u.troops > 0)) { won = false; break; }
+      const dUnits = npcSquad(T.lvl[i], g[1], g[2], new Array(g[1]).fill(g[3]), i + sq, false);
+      const res = Battle.simulate(atkUnits, dUnits, { log: !!report });
+      applyLosses(p, res.A, outcomeOf(res, 0));
+      syncUnits(atkUnits, res.A);
+      kills += killsOf(res.D);
+      if (report) addBattleToReport(report, null, res, '守軍' + (g[0] > 1 ? '（第' + (sq + 1) + '隊）' : ''), p, i, targetName);
+      if (res.winner !== 'atk') won = false;
+    }
+    p.stats.kills += kills;
+    for (const u of atkUnits) if (u.ref) gainExp(p, u.ref, kills * 0.45 * (won ? 1.3 : 1));
+    if (report) {
+      report.result = won ? '掃蕩成功' : '掃蕩失敗';
+      report.win = won;
+      pushReport(report);
+      notify(p.id, '【戰報】掃蕩 ' + targetName + '：' + report.result, won ? 'good' : 'bad');
     }
   }
 
@@ -877,12 +1038,12 @@ var Game = (function () {
         const lg = landGarrison(i);
         squadsState = lg.st.squads; heroLv = lg.heroLv; count = lg.count; isLand = true;
         G.landSiege[i] = lg.st; lg.st.until = G.time + 30;
-      } else if (city.type === 'main') {
+      } else if (city.type === 'main' || (city.type === 'branch' && !(city.building > G.time))) {
         const o = P[city.owner];
-        if (!city.garrison || city.resetAt < G.time) { const md = mainCityDefense(o); city.garrison = md.squads; city.gLv = md.heroLv; }
+        if (!city.garrison || city.resetAt < G.time) { const md = mainCityDefense(o); city.garrison = city.type === 'branch' ? md.squads.slice(0, 1) : md.squads; city.gLv = md.heroLv; }
         squadsState = city.garrison; heroLv = city.gLv || 10; count = 3;
         if (!city.resetAt || city.resetAt < G.time) city.resetAt = G.time + CFG.GARRISON_RESET_MIN;
-      } else if (city.type !== 'fort' && city.alliance < 0) {
+      } else if (!World.isPlayerCity(city) && city.alliance < 0) {
         if (!city.garrison) cityGarrisonInit(city);
         if (!city.resetAt || city.resetAt < G.time) city.resetAt = G.time + CFG.GARRISON_RESET_MIN;
         squadsState = city.garrison; heroLv = CFG.CITY_GARRISON[city.lvl][1]; count = 3; cityNpc = true;
@@ -996,10 +1157,12 @@ var Game = (function () {
       }
       return '拆除耐久 ' + dmg + '（剩餘 ' + city.dur + '/' + city.maxDur + '）';
     }
-    if (city.type === 'fort') {
-      if (city.building > G.time) { removeFort(city); return '摧毀建造中的要塞'; }
+    if (World.isOutpost(city) || city.type === 'branch') {
+      const nm = CFG.CITY_TYPE_NAME[city.type];
+      const kill = city.type === 'branch' ? removeBranch : removeFort;
+      if (city.building > G.time) { kill(city); return '摧毀建造中的' + nm; }
       city.dur = Math.max(0, city.dur - dmg);
-      if (city.dur <= 0) { const o = P[city.owner]; removeFort(city); if (o && o.id === G.userId) notify(o.id, '要塞被【' + p.name + '】摧毀了！', 'bad'); return '摧毀要塞！'; }
+      if (city.dur <= 0) { const o = P[city.owner]; kill(city); if (o && o.id === G.userId) notify(o.id, nm + '被【' + p.name + '】摧毀了！', 'bad'); return '摧毀' + nm + '！'; }
       return '拆除耐久 ' + dmg + '（剩餘 ' + city.dur + '）';
     }
     // 城池 / 關口
@@ -1185,6 +1348,7 @@ var Game = (function () {
       if (p.reserve < rcap) p.reserve = Math.min(rcap, p.reserve + CFG.reserveProd(p.b.recruit) / 60);
       // 傷兵治療（部隊在主城待命）
       healTick(p);
+      trainTick(p);
       // 征兵完成
       for (const tm of p.teams) {
         if (tm.rq && tm.rq.end <= now) {
@@ -1204,7 +1368,12 @@ var Game = (function () {
           if (c.type !== 'main') { c.garrison = null; c.resetAt = 0; }
           else { c.garrison = null; c.resetAt = 0; }
         }
-        if (c.type === 'fort' && c.building && c.building <= now) { c.building = 0; if (c.owner === G.userId) notify(c.owner, '要塞建造完成', 'good'); }
+        if ((World.isOutpost(c) || c.type === 'branch') && c.building && c.building <= now) {
+          c.building = 0;
+          if (c.type === 'branch') recompute(P[c.owner]);
+          if (c.owner === G.userId) notify(c.owner, CFG.CITY_TYPE_NAME[c.type] + '建造完成', 'good');
+        }
+        if (c.type === 'camp' && c.expire && c.expire <= now) { if (c.owner === G.userId) notify(c.owner, '營帳到期，已拆除', 'info'); removeFort(c); }
       }
       for (const k in G.landSiege) if (G.landSiege[k].until < now) delete G.landSiege[k];
     }
@@ -1339,11 +1508,12 @@ var Game = (function () {
       const h = (c.size - 1) >> 1;
       c.tiles = [];
       if (c.type === 'main') { World.cities.push(c); World.applyMainCity(c); continue; }
-      if (c.type === 'fort') { c.tiles = [c.cy * N + c.cx]; World.cities.push(c); if (!c.dead) T.city[c.tiles[0]] = c.id; continue; }
+      if (c.type === 'fort' || c.type === 'camp') { c.tiles = [c.cy * N + c.cx]; World.cities.push(c); if (!c.dead) T.city[c.tiles[0]] = c.id; continue; }
+      if (c.type === 'branch') { World.cities.push(c); if (!c.dead) World.applyCityTiles(c); else { for (let y = c.cy - 1; y <= c.cy + 1; y++) for (let x = c.cx - 1; x <= c.cx + 1; x++) c.tiles.push(y * N + x); } continue; }
       for (let y = c.cy - h; y <= c.cy + h; y++) for (let x = c.cx - h; x <= c.cx + h; x++) c.tiles.push(y * N + x);
       World.cities.push(c);
     }
-    if (World.cities.filter(c => c.type !== 'main' && c.type !== 'fort').length !== npcCount) throw new Error('地圖重建不一致');
+    if (World.cities.filter(c => !World.isPlayerCity(c)).length !== npcCount) throw new Error('地圖重建不一致');
     T.owner = U.unrle(data.owner, N * N);
     for (const k in G) delete G[k];
     Object.assign(G, data.G);
@@ -1367,7 +1537,7 @@ var Game = (function () {
     for (let i = 0; i < N * N; i++) {
       const o = T.owner[i];
       if (o >= 0 && T.city[i] < 0) { landPos[i] = P[o].lands.length; P[o].lands.push(i); }
-      else if (o >= 0 && T.city[i] >= 0 && World.cities[T.city[i]].type === 'fort') { landPos[i] = P[o].lands.length; P[o].lands.push(i); }
+      else if (o >= 0 && T.city[i] >= 0 && World.isOutpost(World.cities[T.city[i]])) { landPos[i] = P[o].lands.length; P[o].lands.push(i); }
     }
     G.dirty = []; G.notices = []; G.fx = []; G.invites = G.invites || [];
     U.setRngState(data.rng);
@@ -1413,6 +1583,7 @@ var Game = (function () {
     canAfford, pay, gain, recompute, upgradeBuilding, mainCityMaxDur, allianceBonus,
     // 地圖
     tileOwner, tileAlliance, isFriendly, adjFriendly, attackBlock, setOwner, abandon, buildFort, cityLockedDay, baseValid,
+    buildCamp, buildBranch, canBranch, relocate, canRelocate, isHome, farmYield, outpostCount,
     // 行軍
     send, recall, marchPos, marchTime, marchMorale, startReturn,
     landGarrison, npcSquad, cityGarrisonInit, mainCityDefense,

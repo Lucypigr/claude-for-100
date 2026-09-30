@@ -1560,7 +1560,10 @@ var Game = (function () {
   function err(msg) { return { ok: false, msg }; }
 
   // 使用者儲值（模擬）
-  function recharge(p, amt) { p.gold += amt; p.stats.paid = (p.stats.paid || 0) + amt; return ok(); }
+  function recharge(p, amt, kind) {
+    if (kind === 'copper') { p.copper += amt; return ok(); }
+    p.gold += amt; p.stats.paid = (p.stats.paid || 0) + amt; return ok();
+  }
 
   function claimQuest(p, q) {
     if (p.quests[q.id]) return err('已領取');

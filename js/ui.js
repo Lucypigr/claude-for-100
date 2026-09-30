@@ -139,7 +139,7 @@ var UI = (function () {
     const rcap = CFG.reserveCap(user.b.recruit);
     h += '<div class="res' + (user.reserve >= rcap * 0.99 ? ' full' : '') + '" title="預備兵：征兵需消耗預備兵（' + Math.floor(user.reserve) + '/' + rcap + '），募兵所可提高產量與上限"><i class="ri reserve">兵</i><b>' + U.fmt(user.reserve) + '</b><small>+' + U.fmt(CFG.reserveProd(user.b.recruit)) + '</small></div>';
     h += '<div class="res" title="戰法點：用於升級戰法，可由武將轉化取得"><i class="ri skp">法</i><b>' + U.fmt(user.skp) + '</b></div>';
-    h += '<div class="res" title="銅幣"><i class="ri copper">銅</i><b>' + U.fmt(user.copper) + '</b><small>+' + U.fmt(user.prod.copper) + '</small></div>';
+    h += '<div class="res" title="銅幣"><i class="ri copper">銅</i><b>' + U.fmt(user.copper) + '</b><small>+' + U.fmt(user.prod.copper) + '</small><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
     h += '<div class="res" title="金銖"><i class="ri gold">金</i><b>' + U.fmt(user.gold) + '</b><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
     $('#resbar').innerHTML = h;
     const ph = Game.phase();
@@ -652,7 +652,7 @@ var UI = (function () {
         if (best >= 5) toast('恭喜獲得五星武將！', 'good');
         refreshPanel(); break;
       }
-      case 'recharge': { Game.recharge(user, +d.amt); toast('儲值成功，獲得 ' + d.amt + ' 金銖（模擬）', 'good'); refreshPanel(); break; }
+      case 'recharge': { const cu = d.kind === 'copper'; Game.recharge(user, +d.amt, d.kind); toast('儲值成功，獲得 ' + U.fmtFull(+d.amt) + (cu ? ' 銅幣' : ' 金銖') + '（模擬）', 'good'); refreshPanel(); break; }
       case 'report': repSel = +d.id; const rp = G.reports.find(r => r.id === repSel); if (rp) rp.read = true; refreshPanel(); break;
       case 'readall': G.reports.forEach(r => r.read = true); refreshPanel(); break;
       case 'join': { const r = Game.joinAlliance(user, +d.a); toast(r.ok ? '加入同盟成功！' : r.msg, r.ok ? 'good' : 'warn'); G.invites = []; refreshPanel(); break; }
@@ -876,6 +876,7 @@ var UI = (function () {
     recharge() {
       let h = '<div class="muted">本遊戲為單機模擬，「儲值」不需付費，僅為體驗課長玩法。</div><div class="packs" style="margin-top:12px">';
       for (const [amt, lab] of [[680, '小月卡'], [3280, '中額禮包'], [6480, '648 大禮包']]) h += '<div class="pack"><div class="pn">' + lab + '</div><div class="pr">獲得 ' + amt + ' 金銖</div><button class="btn gold big" data-act="recharge" data-amt="' + amt + '">儲值</button></div>';
+      h += '<div class="pack"><div class="pn">銅幣禮包</div><div class="pr">獲得 500,000 銅幣</div><button class="btn gold big" data-act="recharge" data-kind="copper" data-amt="500000">儲值</button></div>';
       return h + '</div><div style="margin-top:10px">目前金銖：' + U.fmtFull(user.gold) + '</div>';
     },
 
@@ -941,6 +942,7 @@ var UI = (function () {
         const inv = (G.invites || []).filter(x => G.alliances[x.a] && !G.alliances[x.a].dead);
         if (inv.length) h += '<div class="target-box"><b>同盟邀請：</b>' + inv.map(x => { const a = G.alliances[x.a]; return '〔' + E(a.name) + '〕（' + a.members.length + '人，' + World.states[a.state].name + '）<button class="btn small gold" data-act="join" data-a="' + a.id + '">接受</button>'; }).join('　') + '</div>';
         h += '<div class="sec-t">創建同盟</div><div style="display:flex;gap:6px;align-items:center"><input id="alli-name-in" maxlength="8" placeholder="同盟名稱(1~8字)" style="background:#efe2c2;border:1px solid #8d6b33;padding:5px"><button class="btn red" data-act="create">創建（銅幣 10000）</button></div>';
+        if (user.copper < CFG.ALLIANCE_CREATE_COST.copper) h += '<div class="warn" style="margin-top:4px">目前銅幣 ' + U.fmtFull(Math.floor(user.copper)) + '，不足 10000。升級民居可提高銅幣收入，或 <span class="link" data-act="open" data-panel="recharge">模擬儲值銅幣</span>。</div>';
         h += '<div class="sec-t">加入同盟</div><table class="tbl"><tr><th>同盟</th><th>盟主</th><th>人數</th><th>城池</th><th>勢力</th><th>主要州</th><th></th></tr>';
         const al = G.alliances.filter(a => !a.dead).sort((a, b) => (b.state === user.state) - (a.state === user.state) || b.power - a.power);
         for (const a of al) {

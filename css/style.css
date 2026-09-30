@@ -18,7 +18,13 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #120e09; color: var(--text); font-family: var(--serif); font-size: 14px; -webkit-user-select: none; user-select: none; }
-canvas#map { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: grab; }
+/* 手機：頁面固定不捲動、不縮放、不回彈；旋轉時字級不自動放大 */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html, body { position: fixed; inset: 0; width: 100%; overscroll-behavior: none; touch-action: pan-x pan-y; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+.win-body, #chatlog, #teampanel, #menubar, .hist-list, .hero-list, .picker, .rep-list, .rep-detail, .hdetail, .blog { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+canvas#map { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; cursor: grab; touch-action: none; }
+#maptools, #menubar, .tool, .mbtn { touch-action: manipulation; }
 canvas#map.drag { cursor: grabbing; }
 .hidden { display: none !important; }
 button { font-family: var(--serif); }
@@ -375,4 +381,52 @@ table.tbl tr:hover td { background: rgba(141, 107, 51, 0.12); }
   .mbtn span { font-size: 10px; }
   #menubar { bottom: auto; top: 66px; left: auto; right: 0; transform: none; flex-direction: column; }
   .hero-layout, .rep-layout { grid-template-columns: 1fr; }
+}
+/* 手機直屏：頂部改兩列（主公＋時間／資源三欄），其餘浮動元件依序排開不重疊 */
+@media (max-width: 600px) and (orientation: portrait) {
+  #topbar { height: auto; flex-wrap: wrap; gap: 4px 6px; padding: 4px 6px 6px; background: linear-gradient(rgba(16, 11, 7, 0.96), rgba(16, 11, 7, 0.85)); }
+  #lord { flex: 1; gap: 6px; }
+  .avatar { width: 36px; height: 36px; font-size: 19px; }
+  .lord-name { font-size: 15px; }
+  .lord-sub { font-size: 10.5px; }
+  #clock { min-width: 0; }
+  #clock-time { font-size: 14px; }
+  #clock-phase { font-size: 10.5px; }
+  #speed button { padding: 1px 3px; }
+  #resbar { order: 3; flex: 0 0 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+  #resbar .res { min-width: 0; padding: 1px 4px 1px 2px; }
+  #resbar .res .ri { width: 18px; height: 18px; font-size: 11px; }
+  #resbar .res b { font-size: 11.5px; }
+  #leftcol { top: 124px; width: 150px; }
+  #mini { width: 140px; height: 72px; }
+  #quest-mini { display: none; }
+  #teampanel { top: 124px; right: 58px; width: 160px; max-height: 40vh; }
+  #menubar { top: 118px; max-height: calc(100dvh - 124px); }
+  #maptools { left: 8px; right: auto; bottom: 150px; flex-direction: column; }
+  .tool { width: 34px; height: 34px; font-size: 15px; }
+  #chatbox { width: calc(100vw - 70px); }
+  #chatlog { height: 70px; }
+  #toasts { top: 124px; }
+  .win { width: 100vw; height: calc(100dvh - 8px); }
+  .win-title span { font-size: 20px; letter-spacing: 3px; }
+  .win-title span::before, .win-title span::after { margin: 0 6px; }
+  .win-body { padding: 8px; }
+  #start { align-items: flex-start; overflow-y: auto; }
+  .start-box { margin: 10px 0; padding: 18px 16px; }
+  .game-title { font-size: 44px; letter-spacing: 6px; }
+}
+/* 手機橫屏：高度很小，壓縮頂部與側欄 */
+@media (max-height: 500px) and (orientation: landscape) {
+  #topbar { height: 48px; padding: 3px 8px; }
+  .avatar { width: 38px; height: 38px; font-size: 20px; }
+  .lord-sub2 { display: none; }
+  #leftcol { top: 52px; }
+  #quest-mini { display: none; }
+  #teampanel { top: 66px; max-height: calc(100dvh - 130px); }
+  #toasts { top: 52px; }
+  #chatlog { height: 60px; }
+  .win { height: calc(100dvh - 8px); }
+  .win-title { height: 38px; }
+  #start { align-items: flex-start; overflow-y: auto; }
+  .start-box { margin: 8px 0; }
 }

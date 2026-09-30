@@ -67,7 +67,7 @@ input, select { font-family: var(--serif); }
 #resbar { flex: 1; display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; }
 .res { display: flex; align-items: center; gap: 5px; background: rgba(0, 0, 0, 0.45); border: 1px solid rgba(141, 107, 51, 0.6); border-radius: 14px; padding: 2px 10px 2px 3px; min-width: 112px; }
 .res .ri { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-style: normal; font-family: var(--brush); font-size: 13px; color: #fff; border: 1px solid rgba(0, 0, 0, 0.5); }
-.ri.wood { background: #4f7a3a; } .ri.iron { background: #6a6f78; } .ri.stone { background: #9a7e56; } .ri.grain { background: #c19a2a; } .ri.copper { background: #a8662e; } .ri.gold { background: linear-gradient(#f7d46a, #b9861f); color: #3a2400; }
+.ri.wood { background: #4f7a3a; } .ri.iron { background: #6a6f78; } .ri.stone { background: #9a7e56; } .ri.grain { background: #c19a2a; } .ri.copper { background: #a8662e; } .ri.reserve { background: #8e2f22; } .ri.skp { background: #4a3a8a; } .ri.gold { background: linear-gradient(#f7d46a, #b9861f); color: #3a2400; }
 .res b { font-weight: normal; color: var(--paper); font-size: 13px; }
 .res small { color: #8fd38f; font-size: 11px; }
 .res.full b { color: #ff9f6a; }
@@ -107,6 +107,15 @@ input, select { font-family: var(--serif); }
 .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #c8452f, #e88a3a); }
 .bar.sta > i { background: linear-gradient(90deg, #3a7bd5, #6fb1ff); }
 .bar.exp > i { background: linear-gradient(90deg, #7a4bc2, #b98cff); }
+.bar.wb { display: flex; }
+.bar > i.w { background: repeating-linear-gradient(45deg, #7d6a5a 0 3px, #5a4a3c 3px 6px); }
+.wtxt { color: #d9a07a; }
+.morale { font-size: 11px; padding: 0 4px; border-radius: 2px; background: #3b4f6e; color: #dce8ff; }
+.morale.low { background: #7a3b1a; color: #ffe0c0; }
+.sklv { font-size: 12px; color: #ffe3b0; margin-left: 4px; }
+.drill { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.drill .bar { flex: 1; height: 7px; }
+.drill .bar > i { background: linear-gradient(90deg, #2f7d6d, #5fd3b8); }
 .tcard .tinfo { display: flex; justify-content: space-between; color: var(--dim); font-size: 11px; margin-top: 2px; }
 
 /* ---------- 地圖工具 ---------- */

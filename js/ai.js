@@ -221,16 +221,43 @@ var AI = (function () {
         else if (Game.tpl(f).star >= 3 && !p.lib.includes(Game.tpl(f).skill) && U.rnd() < pr.skill) Game.inheritHero(p, f.uid);
       }
     }
-    // 清理多餘低星武將（拆解）
+    // 演練：用閒置低星武將推進研究中的戰法
+    const fodder = () => p.heroes.filter(h => h.team < 0 && Game.tpl(h).star <= 3).sort((a, b) => Game.tpl(a).star - Game.tpl(b).star || a.lv - b.lv);
+    for (const sid in p.libp) {
+      if (U.rnd() > 0.3 + pr.skill) continue;
+      const fd = fodder();
+      while (fd.length > 4 && p.libp[sid] !== undefined) Game.drillSkill(p, sid, fd.shift().uid);
+    }
+    // 清理多餘武將：高星傳承，其餘轉化為戰法點
     const idle = p.heroes.filter(h => h.team < 0);
-    if (p.heroes.length > 30) {
+    const keep = 12 + Math.round(pr.skill * 6);
+    if (p.heroes.length > keep) {
       idle.sort((a, b) => Game.tpl(a).star - Game.tpl(b).star || a.lv - b.lv);
-      let rm = p.heroes.length - 30;
+      let rm = p.heroes.length - keep;
       for (const h of idle) {
         if (rm <= 0) break;
         const t = Game.tpl(h);
-        if (t.star >= 4 && !p.lib.includes(t.skill) && pr.skill > 0.5) { Game.inheritHero(p, h.uid); rm--; continue; }
-        if (t.star <= 3) { const i = p.heroes.indexOf(h); if (i >= 0) { p.heroes.splice(i, 1); rm--; } }
+        if (t.star >= 4 && !p.lib.includes(t.skill) && pr.skill > 0.5) { if (Game.inheritHero(p, h.uid).ok) { rm--; continue; } }
+        if (t.star <= 3 || U.rnd() < 0.2) { if (Game.convertHero(p, h.uid).ok) rm--; }
+      }
+    }
+    // 升級戰法：優先主力部隊的自帶戰法
+    if (U.rnd() < 0.3 + pr.skill) {
+      let guard = 40;
+      while (guard-- > 0) {
+        let best = null, bl = 99;
+        for (const team of p.teams) {
+          for (const uid of team.slots) {
+            const h = Game.heroByUid(p, uid);
+            if (!h) continue;
+            for (let k = 0; k < 3; k++) {
+              if (!h.sk[k] || h.sl[k] >= CFG.SKILL_MAX_LV) continue;
+              const v = h.sl[k] + team.id * 1.5 + k * 0.5;
+              if (v < bl) { bl = v; best = [h, k]; }
+            }
+          }
+        }
+        if (!best || !Game.upgradeSkill(p, best[0].uid, best[1]).ok) break;
       }
     }
     // 加點
@@ -406,6 +433,11 @@ var AI = (function () {
     curNoise = U.gauss() * 0.45 * (1 - pr.skill) + bias;
   }
   function perceived(p, ratio) { return ratio * Math.exp(curNoise); }
+  // 士氣折算後的戰力（老手會考慮士氣，新手常忽略）
+  function mtp(p, team, tp, i) {
+    const m = CFG.moraleDmg(Game.marchMorale(p, team, i));
+    return tp * (1 - (1 - m) * (0.3 + 0.7 * p.prof.skill));
+  }
   function winP(r) { return 1 / (1 + Math.exp(-7 * (r - 1))); }
 
   function military(p) {
@@ -471,8 +503,8 @@ var AI = (function () {
     const c = World.cities[a.target];
     const ctr = c.tiles[(c.tiles.length / 2) | 0];
     const cur = World.dist(team.base, ctr);
-    if (cur < 30) return -1;
-    let best = -1, bd = cur - 15;
+    if (cur < 22) return -1; // 太遠會掉士氣，先調動到前線
+    let best = -1, bd = cur - 10;
     const cands = a.cities.map(cid => { const cc = World.cities[cid]; return cc.tiles[(cc.tiles.length / 2) | 0]; });
     for (const fid of p.forts) { const f = World.cities[fid]; if (!f.dead) cands.push(f.tiles[0]); }
     cands.push(p.cityTile);
@@ -545,7 +577,7 @@ var AI = (function () {
     for (const i of cands) {
       if (T.owner[i] >= 0) continue; // 他人土地交給 PvP 邏輯
       const L = T.lvl[i];
-      const ratio = tp / (GP[L] * R50[L]);
+      const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L]);
       const pr2 = winP(perceived(p, ratio));
       const need = reckless ? 0.25 : 0.45 + pr.skill * 0.3;
       if (pr2 < need) continue;
@@ -583,7 +615,7 @@ var AI = (function () {
       const L = T.lvl[i];
       // 估計對方駐守與守軍
       const enemyBest = bestTeamPower(op) * (op.teams.some(t => t.gtile === i) ? 1 : 0.15);
-      const ratio = tp / (GP[L] * R50[L] + enemyBest * 0.9);
+      const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L] + enemyBest * 0.9);
       const w = winP(perceived(p, ratio));
       if (w < 0.55) continue;
       let v = L * 60 + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 150 : 0) - World.dist(i, team.base) * 5;
@@ -607,7 +639,7 @@ var AI = (function () {
             const d = World.dist(i, ct);
             if (d >= bd || d > 14) continue;
             const L = T.lvl[i];
-            if (winP(perceived(p, tp / (GP[L] * R50[L]) * (T.owner[i] >= 0 ? 0.7 : 1))) < 0.45) continue;
+            if (winP(perceived(p, mtp(p, team, tp, i) / (GP[L] * R50[L]) * (T.owner[i] >= 0 ? 0.7 : 1))) < 0.45) continue;
             bd = d; best2 = i;
           }
           if (best2 >= 0) return best2;
@@ -672,7 +704,7 @@ var AI = (function () {
         squadP = CP[Math.min(8, city.lvl)] * 1.2;
         aliveSq = 1;
       }
-      const w = squadP ? winP(perceived(p, tp / squadP)) : 1;
+      const w = squadP ? winP(perceived(p, mtp(p, team, tp, center) / squadP)) : 1;
       // 消耗戰：戰力足夠就上，守軍清空則全力拆耐久
       if (aliveSq === 0 || w > 0.18 - p.prof.skill * 0.06 || (p.prof.skill < 0.4 && U.chance(0.3))) {
         if (!Game.attackBlock(p, center)) return center;
@@ -689,7 +721,7 @@ var AI = (function () {
       if (Game.isFriendly(p, i)) continue;
       if (T.owner[i] >= 0 && Game.P[T.owner[i]].alliance === p.alliance) continue;
       const L = T.lvl[i];
-      const ratio = tp / (GP[L] * R50[L]) * (T.owner[i] >= 0 ? 0.6 : 1);
+      const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L]) * (T.owner[i] >= 0 ? 0.6 : 1);
       const damaged = Game.G.landSiege[i] ? 1.25 : 1; // 守軍已被消耗
       if (winP(perceived(p, ratio * damaged)) < 0.33) continue;
       const d = World.dist(i, team.base);

@@ -54,7 +54,7 @@ var Game = (function () {
       id, name, ai, prof, alliance: -1, role: 0,
       state: stateId, city: -1, cityTile: center,
       res: { wood: 6000, iron: 6000, stone: 6000, grain: 8000 }, copper: 8000, gold: CFG.START_GOLD,
-      b, bq: [], heroes: [], hid: 1, teams: [], lib: BASIC_SKILLS.slice(),
+      b, bq: [], heroes: [], hid: 1, teams: [], lib: BASIC_SKILLS.slice(), libp: {}, skp: CFG.SKP_START, reserve: CFG.RESERVE_START,
       fame: 0, lands: [], landCount: 0, landProd: [0, 0, 0, 0], firstCap: {},
       captor: -1, captureEnd: 0, protectEnd: CFG.PROTECT_DAYS * 1440,
       stats: { draws: 0, kills: 0, lost: 0, landsTaken: 0, maxLandLv: 0, cities: 0, battles: 0, wins: 0, cityDmg: 0 },
@@ -81,13 +81,15 @@ var Game = (function () {
   // ================= 武將 =================
   function addHero(p, tid) {
     const t = HEROES[tid];
-    const h = { uid: p.hid++, t: tid, lv: 1, exp: 0, troops: 0, sta: CFG.STAMINA_MAX, staT: G.time || 0, pts: { atk: 0, def: 0, int: 0, spd: 0 }, adv: 0, sk: [t.skill, null, null], team: -1 };
+    const h = { uid: p.hid++, t: tid, lv: 1, exp: 0, troops: 0, wnd: 0, sta: CFG.STAMINA_MAX, staT: G.time || 0, pts: { atk: 0, def: 0, int: 0, spd: 0 }, adv: 0, sk: [t.skill, null, null], sl: [1, 1, 1], team: -1 };
     p.heroes.push(h);
     return h;
   }
   function heroByUid(p, uid) { if (!uid) return null; for (const h of p.heroes) if (h.uid === uid) return h; return null; }
   function tpl(h) { return HEROES[h.t]; }
   function heroCap(p, h) { return CFG.heroTroopCap(h.lv, p.b.barracks); }
+  // 可征兵空間（傷兵佔用帶兵名額，治療後歸隊）
+  function heroRoom(p, h) { return Math.max(0, heroCap(p, h) - h.troops - (h.wnd || 0)); }
   function freePoints(h) {
     const total = Math.floor(h.lv / 10) * CFG.POINTS_PER_10LV + h.adv * 10;
     return total - (h.pts.atk + h.pts.def + h.pts.int + h.pts.spd);
@@ -133,7 +135,7 @@ var Game = (function () {
     const t0 = tpl(hs[0]);
     return { f: hs.every(h => tpl(h).faction === t0.faction) ? 0.08 : 0, t: hs.every(h => tpl(h).troop === t0.troop) ? 0.06 : 0 };
   }
-  function teamUnits(p, team) {
+  function teamUnits(p, team, morale) {
     const out = [];
     const bn = teamBonus(p, team);
     team.slots.forEach((uid, slot) => {
@@ -141,7 +143,9 @@ var Game = (function () {
       if (!h) return;
       const s = heroStats(p, h), t = tpl(h);
       const fa = 1 + bn.f, ta = 1 + bn.t;
-      out.push({ name: t.name, faction: t.faction, troop: t.troop, troops: h.troops, atk: s.atk * fa * ta, def: s.def * fa * ta, int: s.int * fa, spd: s.spd * fa, range: s.range, siege: s.siege, skills: h.sk.filter(Boolean), slot, lv: h.lv, ref: h });
+      const skills = [], skl = [];
+      h.sk.forEach((sid, k) => { if (sid) { skills.push(sid); skl.push(h.sl[k]); } });
+      out.push({ name: t.name, faction: t.faction, troop: t.troop, troops: h.troops, atk: s.atk * fa * ta, def: s.def * fa * ta, int: s.int * fa, spd: s.spd * fa, range: s.range, siege: s.siege, skills, skl, morale: morale === undefined ? 100 : morale, slot, lv: h.lv, ref: h });
     });
     return out;
   }
@@ -203,18 +207,19 @@ var Game = (function () {
   // 征兵
   function recruitCost(p, team, frac) {
     const c = { wood: 0, iron: 0, grain: 0 }, add = {};
-    let maxT = 0;
+    let maxT = 0, men = 0;
     for (const h of teamHeroes(p, team)) {
       if (!h) continue;
-      const need = Math.floor((heroCap(p, h) - h.troops) * (frac || 1));
+      const need = Math.floor(heroRoom(p, h) * (frac || 1));
       if (need <= 0) continue;
       add[h.uid] = need;
+      men += need;
       const m = tpl(h).cost / 3;
       for (const r in c) c[r] += need * CFG.RECRUIT_COST[r] * m;
       maxT = Math.max(maxT, need / CFG.recruitRate(p.b.recruit));
     }
     for (const r in c) c[r] = Math.ceil(c[r]);
-    return { cost: c, add, time: Math.ceil(maxT) };
+    return { cost: c, add, men, time: Math.ceil(maxT) };
   }
   function recruit(p, ti, frac) {
     const team = p.teams[ti];
@@ -222,19 +227,60 @@ var Game = (function () {
     if (team.status !== 'idle' || team.rq) return err('部隊忙碌中');
     if (team.base !== p.cityTile) return err('需回到主城才能征兵');
     let rc = recruitCost(p, team, frac);
-    if (!Object.keys(rc.add).length) return err('兵力已滿');
-    if (!canAfford(p, rc.cost)) {
-      // 依資源比例征兵
+    if (!Object.keys(rc.add).length) {
+      for (const h of teamHeroes(p, team)) if (h && h.wnd > 0) return err('傷兵治療中，無需征兵');
+      return err('兵力已滿');
+    }
+    if (!canAfford(p, rc.cost) || rc.men > p.reserve) {
+      // 依資源與預備兵比例征兵
       let f = 1;
       for (const r in rc.cost) if (rc.cost[r] > 0) f = Math.min(f, p.res[r] / rc.cost[r]);
+      f = Math.min(f, p.reserve / rc.men);
       f = Math.floor(f * 100) / 100 * (frac || 1);
-      if (f < 0.05) return err('資源不足');
+      if (f < 0.05) return err(p.reserve / rc.men < 0.05 ? '預備兵不足' : '資源不足');
       rc = recruitCost(p, team, f);
-      if (!Object.keys(rc.add).length || !canAfford(p, rc.cost)) return err('資源不足');
+      if (!Object.keys(rc.add).length || !canAfford(p, rc.cost) || rc.men > p.reserve) return err('資源或預備兵不足');
     }
     pay(p, rc.cost);
+    p.reserve -= rc.men;
     team.rq = { end: G.time + Math.max(1, rc.time), add: rc.add };
     return ok({ time: rc.time });
+  }
+
+  // 傷兵：部隊在主城待命時自動治療（消耗少量資源，不消耗預備兵）
+  function healTick(p) {
+    const rate = CFG.recruitRate(p.b.recruit) * CFG.HEAL_SPEED;
+    for (const tm of p.teams) {
+      if (tm.status !== 'idle' || tm.base !== p.cityTile) continue;
+      for (const uid of tm.slots) {
+        const h = heroByUid(p, uid);
+        if (!h || !(h.wnd > 0)) continue;
+        const n = Math.min(h.wnd, Math.ceil(rate));
+        const m = tpl(h).cost / 3 * CFG.HEAL_COST * n;
+        const c = { wood: CFG.RECRUIT_COST.wood * m, iron: CFG.RECRUIT_COST.iron * m, grain: CFG.RECRUIT_COST.grain * m };
+        if (!canAfford(p, c)) continue;
+        pay(p, c);
+        h.wnd -= n; h.troops += n;
+        if (h.wnd <= 0) { h.wnd = 0; if (p.id === G.userId && !teamWounded(p, tm)) notify(p.id, '第' + (tm.id + 1) + '部隊傷兵治療完畢', 'good'); }
+      }
+    }
+  }
+  function teamWounded(p, team) { let c = 0; for (const h of teamHeroes(p, team)) if (h) c += h.wnd || 0; return c; }
+  function healTime(p, team) {
+    let w = 0;
+    for (const h of teamHeroes(p, team)) if (h) w = Math.max(w, h.wnd || 0);
+    return Math.ceil(w / (CFG.recruitRate(p.b.recruit) * CFG.HEAL_SPEED));
+  }
+  // 戰後把兵力寫回武將，損失的一部分轉為傷兵
+  function applyLosses(p, units, outcome) {
+    const rate = CFG.WOUND_RATE[outcome];
+    for (const u of units) {
+      const h = u.ref;
+      if (!h) continue;
+      const lost = Math.max(0, h.troops - Math.max(0, u.troops));
+      h.troops = Math.max(0, u.troops);
+      if (p && lost > 0) h.wnd = Math.min(heroCap(p, h) - h.troops, (h.wnd || 0) + Math.round(lost * rate));
+    }
   }
 
   // ================= 資源 =================
@@ -331,15 +377,59 @@ var Game = (function () {
     removeHero(p, f);
     return ok();
   }
+  // 傳承：消耗三星以上武將，取得其自帶戰法的演練進度（B 級直接學會，A 級 50%，S 級 25%）
   function inheritHero(p, uid) {
     const h = heroByUid(p, uid);
     if (!h) return err('武將不存在');
     if (h.team >= 0) return err('武將在部隊中');
     if (tpl(h).star < 3) return err('三星以上武將才能傳承戰法');
     const sid = tpl(h).skill;
+    if (p.lib.includes(sid)) return err('已擁有此戰法');
     removeHero(p, h);
-    if (!p.lib.includes(sid)) p.lib.push(sid);
-    return ok({ skill: sid });
+    const prog = addDrill(p, sid, CFG.INHERIT_PROG[SKILLS[sid].q]);
+    return ok({ skill: sid, prog });
+  }
+  function addDrill(p, sid, n) {
+    const v = Math.min(100, (p.libp[sid] || 0) + n);
+    if (v >= 100) { delete p.libp[sid]; if (!p.lib.includes(sid)) p.lib.push(sid); return 100; }
+    p.libp[sid] = v;
+    return v;
+  }
+  // 演練：消耗閒置武將，提高研究中戰法的進度
+  function drillSkill(p, sid, uid) {
+    if (p.libp[sid] === undefined) return err('沒有研究中的此戰法');
+    const h = heroByUid(p, uid);
+    if (!h) return err('武將不存在');
+    if (h.team >= 0) return err('武將在部隊中');
+    const n = CFG.DRILL_PROG[tpl(h).star];
+    removeHero(p, h);
+    const prog = addDrill(p, sid, n);
+    return ok({ prog, done: prog >= 100 });
+  }
+  // 轉化：武將轉為戰法點
+  function convertValue(h) { return CFG.CONVERT_PTS[tpl(h).star] + h.lv * 10 + h.adv * CFG.CONVERT_PTS[tpl(h).star] * 0.5; }
+  function convertHero(p, uid) {
+    const h = heroByUid(p, uid);
+    if (!h) return err('武將不存在');
+    if (h.team >= 0) return err('武將在部隊中');
+    const n = Math.round(convertValue(h));
+    removeHero(p, h);
+    p.skp += n;
+    return ok({ pts: n });
+  }
+  function skillInvested(q, lv) { let s = 0; for (let l = 1; l < lv; l++) s += CFG.skillUpCost(q, l); return s; }
+  function upgradeSkill(p, uid, k) {
+    const h = heroByUid(p, uid);
+    if (!h) return err('武將不存在');
+    const sid = h.sk[k];
+    if (!sid) return err('此欄位沒有戰法');
+    const lv = h.sl[k] || 1;
+    if (lv >= CFG.SKILL_MAX_LV) return err('戰法已滿級');
+    const cost = CFG.skillUpCost(SKILLS[sid].q, lv);
+    if (p.skp < cost) return err('戰法點不足（需要 ' + cost + '）');
+    p.skp -= cost;
+    h.sl[k] = lv + 1;
+    return ok({ lv: lv + 1 });
   }
   function removeHero(p, h) {
     const i = p.heroes.indexOf(h);
@@ -356,8 +446,14 @@ var Game = (function () {
       if (s.troops && !s.troops.includes(tpl(h).troop)) return err('兵種不符');
       if (h.sk.includes(sid)) return err('已擁有此戰法');
     }
+    // 更換或遺忘時返還部分已投入的戰法點
+    const old = h.sk[k];
+    let refund = 0;
+    if (old && old !== sid) refund = Math.floor(skillInvested(SKILLS[old].q, h.sl[k] || 1) * CFG.SKILL_REFUND);
+    p.skp += refund;
+    if (old !== sid) h.sl[k] = 1;
     h.sk[k] = sid || null;
-    return ok();
+    return ok({ refund });
   }
   function addPoint(p, uid, stat, n) {
     const h = heroByUid(p, uid);
@@ -500,6 +596,11 @@ var Game = (function () {
     if (city.type === 'main') return false;
     return p.alliance >= 0 && city.alliance === p.alliance;
   }
+  // 從部隊目前駐地出發抵達目標時的士氣
+  function marchMorale(p, team, target) {
+    const from = baseValid(p, team.base) ? team.base : p.cityTile;
+    return CFG.moraleAt(World.dist(from, target));
+  }
   function marchTime(p, team, from, to) {
     return Math.max(2, Math.round(World.dist(from, to) * CFG.minPerTile(teamSpeed(p, team))));
   }
@@ -620,7 +721,7 @@ var Game = (function () {
       return;
     }
     if (m.type === 'attack') {
-      resolveAttack(p, team, m.to);
+      resolveAttack(p, team, m.to, CFG.moraleAt(World.dist(m.from, m.to)));
       if (team.status === 'march' && team.march === m.id) startReturn(p, team, m.to);
     }
   }
@@ -640,7 +741,7 @@ var Game = (function () {
       units.push({
         name: (city ? '城防' : '') + tp + '兵守軍', faction: '群', troop: tp, troops: troops[k] !== undefined ? troops[k] : 0,
         atk: (phys ? 48 : 30) + heroLv * (phys ? 2.2 : 1.2), def: 46 + heroLv * 2.05, int: (phys ? 32 : 50) + heroLv * (phys ? 1.1 : 2.2), spd: 45 + heroLv * 1.3,
-        range: tp === '弓' ? 4 : 2, skills: sk, slot: slots[k], lv: heroLv,
+        range: tp === '弓' ? 4 : 2, skills: sk, skl: sk.map(() => Math.min(CFG.SKILL_MAX_LV, lvl)), slot: slots[k], lv: heroLv,
       });
     }
     return units;
@@ -672,10 +773,6 @@ var Game = (function () {
     return { squads: sq, heroLv: 6 + Math.round(w * 3.5) };
   }
 
-  function unitsToHeroes(units, res) {
-    // 戰後把兵力寫回英雄
-    for (const u of res) if (u.ref) u.ref.troops = Math.max(0, u.troops);
-  }
   function killsOf(side) { let k = 0; for (const u of side) k += (u.start - u.troops); return k; }
 
   function defendersAt(i, attacker) {
@@ -700,13 +797,15 @@ var Game = (function () {
     return out;
   }
 
-  function resolveAttack(p, team, i) {
+  function outcomeOf(res, side) { return res.winner === 'draw' ? 'draw' : (res.winner === 'atk') === (side === 0) ? 'win' : 'lose'; }
+  function resolveAttack(p, team, i, morale) {
     const why = attackBlock(p, i);
     if (why) {
       if (p.id === G.userId) notify(p.id, '出征取消：' + why, 'warn');
       return;
     }
-    const atkUnits = teamUnits(p, team);
+    if (morale === undefined) morale = 100;
+    const atkUnits = teamUnits(p, team, morale);
     const logIt = p.id === G.userId || tileOwner(i) === G.userId;
     const c = T.city[i];
     const city = c >= 0 ? World.cities[c] : null;
@@ -721,7 +820,7 @@ var Game = (function () {
     for (const d of defs) {
       const dUnits = teamUnits(d.p, d.team);
       const res = Battle.simulate(atkUnits, dUnits, { log: !!report || d.p.id === G.userId });
-      unitsToHeroes(atkUnits, res.A); unitsToHeroes(dUnits, res.D);
+      applyLosses(p, res.A, outcomeOf(res, 0)); applyLosses(d.p, res.D, outcomeOf(res, 1));
       syncUnits(atkUnits, res.A);
       const kA = killsOf(res.D), kD = killsOf(res.A);
       totalKill += kA;
@@ -758,7 +857,7 @@ var Game = (function () {
           const dUnits = npcSquad(isLand ? T.lvl[i] : (city.lvl || 5), count, heroLv, sq, key + s, !!city);
           if (!(atkUnits.find(u => u.slot === 0 && u.troops > 0))) { won = false; break; }
           const res = Battle.simulate(atkUnits, dUnits, { log: !!report });
-          unitsToHeroes(atkUnits, res.A);
+          applyLosses(p, res.A, outcomeOf(res, 0));
           syncUnits(atkUnits, res.A);
           // 寫回守軍兵力
           const left = dUnits.map(u => { const r = res.D.find(x => x.slot === u.slot); return r ? r.troops : 0; });
@@ -826,7 +925,7 @@ var Game = (function () {
     }
     if (defP && !rep.defName) rep.defName = defP.name;
     rep.battles.push({
-      def: defLabel, winner: res.winner, rounds: res.rounds,
+      def: defLabel, winner: res.winner, rounds: res.rounds, morale: res.A.length ? res.A[0].morale : 100,
       A: res.A.map(u => ({ name: u.name, troop: u.troop, faction: u.faction, lv: u.lv, start: u.start, end: u.troops, slot: u.slot })),
       D: res.D.map(u => ({ name: u.name, troop: u.troop, faction: u.faction, lv: u.lv, start: u.start, end: u.troops, slot: u.slot })),
       log: res.log,
@@ -1043,10 +1142,15 @@ var Game = (function () {
           }
         }
       }
+      // 預備兵
+      const rcap = CFG.reserveCap(p.b.recruit);
+      if (p.reserve < rcap) p.reserve = Math.min(rcap, p.reserve + CFG.reserveProd(p.b.recruit) / 60);
+      // 傷兵治療（部隊在主城待命）
+      healTick(p);
       // 征兵完成
       for (const tm of p.teams) {
         if (tm.rq && tm.rq.end <= now) {
-          for (const uid in tm.rq.add) { const h = heroByUid(p, +uid); if (h) h.troops = Math.min(heroCap(p, h), h.troops + tm.rq.add[uid]); }
+          for (const uid in tm.rq.add) { const h = heroByUid(p, +uid); if (h) h.troops = Math.min(heroCap(p, h) - (h.wnd || 0), h.troops + tm.rq.add[uid]); }
           tm.rq = null;
           if (p.id === G.userId) notify(p.id, '第' + (tm.id + 1) + '部隊征兵完成', 'good');
         }
@@ -1079,8 +1183,8 @@ var Game = (function () {
     const d = day();
     if (d !== G.lastDay) {
       G.lastDay = d;
-      for (const p of P) { p.gold += CFG.DAILY_GOLD; if (p.ai) AI.daily(p); }
-      notify(G.userId, '新的一天！獲得每日金銖 ' + CFG.DAILY_GOLD, 'good');
+      for (const p of P) { p.gold += CFG.DAILY_GOLD; p.skp += CFG.DAILY_SKP; if (p.ai) AI.daily(p); }
+      notify(G.userId, '新的一天！獲得每日金銖 ' + CFG.DAILY_GOLD + '、戰法點 ' + CFG.DAILY_SKP, 'good');
       const ph = CFG.PHASES.find(x => x.day === d);
       if (ph) sys('world', '【天下大勢】進入「' + ph.name + '」：' + ph.desc);
     }
@@ -1143,10 +1247,10 @@ var Game = (function () {
   const skOf = i => (i === null || i === undefined || i < 0) ? null : SKILLS._list[i].id;
   function packHero(h) {
     return [h.uid, h.t, h.lv, Math.round(h.exp), h.troops, Math.round(h.sta * 10) / 10, h.staT, h.pts.atk, h.pts.def, h.pts.int, h.pts.spd, h.adv,
-      h.sk.map(s => s ? SK_IDX[s] : -1), h.team];
+      h.sk.map(s => s ? SK_IDX[s] : -1), h.team, h.wnd || 0, h.sl];
   }
   function unpackHero(a) {
-    return { uid: a[0], t: a[1], lv: a[2], exp: a[3], troops: a[4], sta: a[5], staT: a[6], pts: { atk: a[7], def: a[8], int: a[9], spd: a[10] }, adv: a[11], sk: a[12].map(skOf), team: a[13] };
+    return { uid: a[0], t: a[1], lv: a[2], exp: a[3], troops: a[4], wnd: a[14] || 0, sta: a[5], staT: a[6], pts: { atk: a[7], def: a[8], int: a[9], spd: a[10] }, adv: a[11], sk: a[12].map(skOf), sl: a[15] || [1, 1, 1], team: a[13] };
   }
   function serialize() {
     const cities = World.cities.map(c => {
@@ -1173,6 +1277,8 @@ var Game = (function () {
       o.heroes = p.heroes.map(packHero);
       o.firstCap = U.encodeInts(Object.keys(p.firstCap).map(Number));
       o.lib = p.lib.map(s => SK_IDX[s]);
+      o.libp = {};
+      for (const sid in p.libp) o.libp[SK_IDX[sid]] = p.libp[sid];
       return o;
     });
     return JSON.stringify(data);
@@ -1205,6 +1311,11 @@ var Game = (function () {
       for (const i of U.decodeInts(p.firstCap)) fc[i] = 1;
       p.firstCap = fc;
       p.lib = p.lib.map(skOf).filter(Boolean);
+      const lp = {};
+      for (const k in (p.libp || {})) { const sid = skOf(+k); if (sid) lp[sid] = p.libp[k]; }
+      p.libp = lp;
+      if (p.skp === undefined) p.skp = CFG.SKP_START;
+      if (p.reserve === undefined) p.reserve = CFG.RESERVE_START;
     }
     landPos = new Int32Array(N * N).fill(-1);
     for (const p of P) { p.lands = []; }
@@ -1246,8 +1357,9 @@ var Game = (function () {
     G, newGame, advance, tick, day, phase,
     get T() { return T; }, get P() { return P; },
     // 武將
-    addHero, heroByUid, tpl, heroCap, heroStats, freePoints, getSta, gainExp, slotUnlocked,
+    addHero, heroByUid, tpl, heroCap, heroRoom, heroStats, freePoints, getSta, gainExp, slotUnlocked,
     drawPack, advanceHero, inheritHero, learnSkill, addPoint, resetPoints,
+    drillSkill, convertHero, convertValue, upgradeSkill, skillInvested, teamWounded, healTime,
     // 部隊
     teamCount, costCap, teamHeroes, teamBonus, teamCost, teamTroops, teamCapTroops, teamMinSta, teamSpeed, teamUnits, teamPower, teamReady,
     setSlot, autoFillTeam, recruit, recruitCost,
@@ -1256,7 +1368,7 @@ var Game = (function () {
     // 地圖
     tileOwner, tileAlliance, isFriendly, adjFriendly, attackBlock, setOwner, abandon, buildFort, cityLockedDay, baseValid,
     // 行軍
-    send, recall, marchPos, marchTime, startReturn,
+    send, recall, marchPos, marchTime, marchMorale, startReturn,
     landGarrison, npcSquad, cityGarrisonInit, mainCityDefense,
     // 同盟
     createAlliance, joinAlliance, leaveAlliance, alliancePoints,

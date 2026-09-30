@@ -38,6 +38,32 @@ var CFG = {
   // 征兵
   RECRUIT_COST: { wood: 0.5, iron: 0.5, grain: 1.0 }, // 每兵（再乘 cost/3）
   recruitRate: function (recruitLv) { return 45 * (1 + 0.15 * recruitLv); }, // 每遊戲分鐘每將
+  // 預備兵：征兵需消耗預備兵，募兵所提高產量與上限
+  RESERVE_START: 12000,
+  reserveProd: function (recruitLv) { return 600 + 400 * recruitLv; },   // 每小時
+  reserveCap: function (recruitLv) { return 20000 + 8000 * recruitLv; },
+  // 傷兵：戰鬥損失兵力的一部分轉為傷兵，部隊在主城待命時自動治療
+  WOUND_RATE: { win: 0.6, draw: 0.5, lose: 0.4 },
+  HEAL_SPEED: 2,            // 治療速度 = 征兵速度 × 2
+  HEAL_COST: 0.3,           // 治療每兵消耗 = 征兵消耗 × 0.3（不消耗預備兵）
+  // 士氣：離出發地越遠士氣越低，士氣影響造成的傷害
+  MORALE_FREE_TILES: 6,     // 6 格內不掉士氣
+  MORALE_PER_TILE: 1.5,
+  MORALE_MIN: 40,
+  moraleAt: function (dist) { return Math.round(Math.max(this.MORALE_MIN, 100 - Math.max(0, dist - this.MORALE_FREE_TILES) * this.MORALE_PER_TILE)); },
+  moraleDmg: function (m) { return 0.3 + 0.7 * m / 100; },
+  // 戰法等級 1~10：效果 75%~100%；升級消耗戰法點
+  SKILL_MAX_LV: 10,
+  skillScale: function (lv) { return 0.75 + 0.25 * (Math.max(1, Math.min(10, lv || 10)) - 1) / 9; },
+  SKILL_UP_BASE: { S: 60, A: 45, B: 30 },
+  skillUpCost: function (q, lv) { return Math.round(this.SKILL_UP_BASE[q] * Math.pow(lv, 1.5) / 10) * 10; }, // lv → lv+1
+  SKILL_REFUND: 0.5,        // 更換/遺忘戰法返還 50% 已投入戰法點
+  SKP_START: 2000,
+  DAILY_SKP: 800,
+  CONVERT_PTS: [0, 100, 250, 600, 1500, 3500], // 依星級轉化戰法點（另加等級）
+  // 演練：傳承取得的戰法需演練至 100% 才能使用
+  INHERIT_PROG: { B: 100, A: 50, S: 25 },
+  DRILL_PROG: [0, 5, 10, 20, 40, 70],          // 依素材星級增加演練進度
   // 行軍：每格分鐘數
   minPerTile: function (spd) { return 240 / (Math.max(20, spd) + 60); },
   // 攻城值
@@ -98,7 +124,7 @@ var BUILDINGS = [
   { key: 'warehouse', name: '倉庫', max: 10, req: 1, base: { wood: 400, iron: 300, stone: 500 }, growth: 1.6, time: 5, timeG: 1.45, desc: '提高資源儲存上限' },
   { key: 'drill', name: '校場', max: 4, req: 2, base: { wood: 1500, iron: 1500, stone: 2500 }, growth: 2.4, time: 15, timeG: 1.8, desc: '每級可多配置一支部隊（上限 5 支）' },
   { key: 'barracks', name: '兵營', max: 10, req: 3, base: { wood: 1200, iron: 1500, stone: 1500 }, growth: 1.6, time: 10, timeG: 1.45, desc: '每級武將帶兵上限 +200' },
-  { key: 'recruit', name: '募兵所', max: 10, req: 2, base: { wood: 800, iron: 800, stone: 1000 }, growth: 1.6, time: 8, timeG: 1.45, desc: '每級征兵速度 +15%' },
+  { key: 'recruit', name: '募兵所', max: 10, req: 2, base: { wood: 800, iron: 800, stone: 1000 }, growth: 1.6, time: 8, timeG: 1.45, desc: '每級征兵速度 +15%，預備兵產量 +400/時、上限 +8000' },
   { key: 'command', name: '統帥廳', max: 8, req: 3, base: { wood: 2000, iron: 2000, stone: 3000 }, growth: 1.8, time: 15, timeG: 1.5, desc: '每級部隊統御上限 +0.5' },
   { key: 'wall', name: '城牆', max: 10, req: 2, base: { wood: 800, iron: 600, stone: 1500 }, growth: 1.6, time: 8, timeG: 1.45, desc: '提高主城耐久與城防守軍' },
   { key: 'shangwu', name: '尚武營', max: 5, req: 5, base: { wood: 5000, iron: 6000, stone: 6000 }, growth: 1.9, time: 25, timeG: 1.5, desc: '所有武將攻擊 +4/級' },

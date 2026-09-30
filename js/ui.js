@@ -654,6 +654,7 @@ var UI = (function () {
       }
       case 'recharge': { const cu = d.kind === 'copper'; Game.recharge(user, +d.amt, d.kind); toast('儲值成功，獲得 ' + U.fmtFull(+d.amt) + (cu ? ' 銅幣' : ' 金銖') + '（模擬）', 'good'); refreshPanel(); break; }
       case 'report': repSel = +d.id; const rp = G.reports.find(r => r.id === repSel); if (rp) rp.read = true; refreshPanel(); break;
+      case 'replay': { const rp = G.reports.find(r => r.id === repSel); if (rp) Replay.open(rp, +d.k); break; }
       case 'readall': G.reports.forEach(r => r.read = true); refreshPanel(); break;
       case 'join': { const r = Game.joinAlliance(user, +d.a); toast(r.ok ? '加入同盟成功！' : r.msg, r.ok ? 'good' : 'warn'); G.invites = []; refreshPanel(); break; }
       case 'create': {
@@ -929,7 +930,8 @@ var UI = (function () {
         h += '<div class="sec-t">' + E(cur.target) + ' <span class="link" data-act="gototile" data-tile="' + cur.tile + '">(' + World.X(cur.tile) + ',' + World.Y(cur.tile) + ')</span>　<span class="' + (cur.win ? 'good' : 'bad') + '">' + E(cur.result) + '</span></div>';
         cur.battles.forEach((b, k) => {
           h += '<div class="bside"><div class="col">' + b.A.slice().sort((x, y) => y.slot - x.slot).map(bu).join('') + '</div><div class="vs">VS</div><div class="col">' + b.D.slice().sort((x, y) => x.slot - y.slot).map(bu).join('') + '</div></div>';
-          h += '<div class="muted" style="text-align:center">第 ' + (k + 1) + ' 場：對陣 ' + E(b.def) + '　' + (b.winner === 'atk' ? '<span class="good">進攻方勝</span>' : b.winner === 'def' ? '<span class="bad">防守方勝</span>' : '<span class="warn">平局</span>') + '（' + b.rounds + ' 回合）' + (b.morale !== undefined && b.morale < 100 ? '　進攻方' + moraleTag(b.morale) : '') + '</div>';
+          h += '<div class="muted" style="text-align:center">第 ' + (k + 1) + ' 場：對陣 ' + E(b.def) + '　' + (b.winner === 'atk' ? '<span class="good">進攻方勝</span>' : b.winner === 'def' ? '<span class="bad">防守方勝</span>' : '<span class="warn">平局</span>') + '（' + b.rounds + ' 回合）' + (b.morale !== undefined && b.morale < 100 ? '　進攻方' + moraleTag(b.morale) : '') +
+            (Replay.canReplay(b) ? '　<button class="btn small gold" data-act="replay" data-k="' + k + '">▶ 戰鬥回放</button>' : '') + '</div>';
           if (b.log && b.log.length) h += '<div class="blog">' + b.log.map(l => '<div class="' + l.c + '">' + E(l.t) + '</div>').join('') + '</div>';
         });
       } else h += '<div class="muted">選擇一份戰報查看詳情</div>';
@@ -1073,6 +1075,7 @@ var UI = (function () {
         '・每支部隊 3 名武將：<b>大營</b>（陣亡即敗）、中軍、前鋒。統御(cost)總和不可超過上限。前鋒放耐打的近戰，大營放攻擊距離遠的核心。<br>' +
         '・兵種克制：騎克步、步克弓、弓克騎。三人同陣營全屬性 +8%，三人同兵種攻防 +6%。<br>' +
         '・戰鬥：準備回合發動指揮/被動戰法，之後最多 8 回合依速度行動（主動戰法 → 普攻 → 追擊戰法）；8 回合未分勝負為平局。<br>' +
+        '・<b>戰鬥回放</b>：在「戰報」每一場戰鬥旁按「▶ 戰鬥回放」，逐步重看誰發動了哪個戰法、打了誰多少傷害、中了什麼狀態；可暫停、上一步/下一步、1×/2×/4× 速度，點下方紀錄可跳到該步（←/→、空白鍵、Esc 也可操作）。<br>' +
         '・<b>士氣</b>：從出發地（主城、分城、要塞、營帳、同盟城池）算距離，' + CFG.MORALE_FREE_TILES + ' 格外每格 -' + CFG.MORALE_PER_TILE + '，最低 ' + CFG.MORALE_MIN + '；士氣越低傷害越低（40 時只剩 58%）。遠征前先調動到前線據點。<br>' +
         '・<b>傷兵</b>：損失的兵力約一半變傷兵，部隊在主城或分城待命時自動治療（便宜、不耗預備兵）；其餘要「征兵」補充。<br>' +
         '・體力：出征、掃蕩消耗 20，屯田 30，每小時恢復 20。' +

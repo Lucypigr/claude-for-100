@@ -68,7 +68,10 @@ var Battle = (function () {
     this.round = 0;
     this.over = false;
   }
-  Ctx.prototype.L = function (text, cls) { if (this.log) this.log.push({ r: this.round, t: text, c: cls || '' }); };
+  // 戰鬥紀錄：t 文字、c 樣式；e 為結構化事件（戰鬥回放用）
+  // e.k：round/cast/prep/dmg/heal/buff/st/ev/ctl/dead/end；a 行動者、d 目標（side*3+slot）；v 數值；n 剩餘兵力；s 戰法/狀態名
+  Ctx.prototype.L = function (text, cls, e) { if (this.log) { const o = { r: this.round, t: text, c: cls || '' }; if (e) o.e = e; this.log.push(o); } };
+  function UK(u) { return u.side * 3 + u.slot; } // 單位代號
   Ctx.prototype.enemies = function (u) { return this.sides[1 - u.side].filter(alive); };
   Ctx.prototype.allies = function (u) { return this.sides[u.side].filter(alive); };
   Ctx.prototype.updatePos = function () {
@@ -135,14 +138,15 @@ var Battle = (function () {
   function dealDamage(ctx, src, tgt, type, rate, label) {
     if (!alive(tgt)) return 0;
     const ev = has(tgt, 'evade');
-    if (ev && rnd() < stSum(tgt, 'evade')) { ctx.L(nm(tgt) + ' 規避了傷害', 'ev'); return 0; }
+    if (ev && rnd() < stSum(tgt, 'evade')) { ctx.L(nm(tgt) + ' 規避了傷害', 'ev', { k: 'ev', a: UK(src), d: UK(tgt), s: '規避' }); return 0; }
     let dmg = Math.round(rawDmg(src, tgt, type, rate));
     dmg = Math.max(1, Math.min(tgt.troops, dmg));
     tgt.troops -= dmg;
     tgt.wounded += dmg;
     src.dealt += dmg;
-    ctx.L(nm(src) + (label === '普通攻擊' ? ' 普通攻擊 ' : label === '反擊' ? ' 反擊 ' : ' 以【' + label + '】攻擊 ') + nm(tgt) + '，造成' + (type === 'phys' ? '兵刃' : '謀略') + '傷害 ' + dmg + '（剩餘 ' + tgt.troops + '）', src.side === 0 ? 'dmg0' : 'dmg1');
-    if (!alive(tgt)) { ctx.L(nm(tgt) + ' 兵力耗盡，無法再戰', 'dead'); ctx.updatePos(); }
+    ctx.L(nm(src) + (label === '普通攻擊' ? ' 普通攻擊 ' : label === '反擊' ? ' 反擊 ' : ' 以【' + label + '】攻擊 ') + nm(tgt) + '，造成' + (type === 'phys' ? '兵刃' : '謀略') + '傷害 ' + dmg + '（剩餘 ' + tgt.troops + '）', src.side === 0 ? 'dmg0' : 'dmg1',
+      { k: 'dmg', a: UK(src), d: UK(tgt), v: dmg, n: tgt.troops, s: label, t: type === 'phys' ? 0 : 1 });
+    if (!alive(tgt)) { ctx.L(nm(tgt) + ' 兵力耗盡，無法再戰', 'dead', { k: 'dead', d: UK(tgt) }); ctx.updatePos(); }
     return dmg;
   }
 
@@ -153,7 +157,7 @@ var Battle = (function () {
     h = Math.round(Math.min(h, tgt.wounded));
     if (h <= 0) return 0;
     tgt.troops += h; tgt.wounded -= h; src.healed += h;
-    ctx.L(nm(tgt) + ' 因【' + label + '】恢復兵力 ' + h + '（剩餘 ' + tgt.troops + '）', 'heal');
+    ctx.L(nm(tgt) + ' 因【' + label + '】恢復兵力 ' + h + '（剩餘 ' + tgt.troops + '）', 'heal', { k: 'heal', a: UK(src), d: UK(tgt), v: h, n: tgt.troops, s: label });
     return h;
   }
 
@@ -175,13 +179,14 @@ var Battle = (function () {
           t.buffs = t.buffs.filter(b => b.key !== key);
           const sign = f.k === 'debuff' ? -1 : 1;
           t.buffs.push({ key, stat: f.stat, v: (f.v || 0) * sign, pct: (f.pct || 0) * sign, left: f.dur || 1 });
-          if (f.dur !== 99 || sk.type === 'active') ctx.L(nm(t) + ' 的' + STAT_NAME[f.stat] + (sign > 0 ? '提高' : '降低') + (f.pct ? Math.round(f.pct * 100) + '%' : f.v) + '（' + sk.name + '）', 'buff');
+          if (f.dur !== 99 || sk.type === 'active') ctx.L(nm(t) + ' 的' + STAT_NAME[f.stat] + (sign > 0 ? '提高' : '降低') + (f.pct ? Math.round(f.pct * 100) + '%' : f.v) + '（' + sk.name + '）', 'buff',
+            { k: 'buff', a: UK(u), d: UK(t), s: STAT_NAME[f.stat] + (sign > 0 ? '↑' : '↓'), up: sign > 0 ? 1 : 0, dur: f.dur || 1, from: sk.name });
         }
       } else if (f.k === 'st') {
         for (const t of tg) {
           if (!alive(t)) continue;
           if (f.p && rnd() >= f.p) continue;
-          if (CONTROL[f.st] && has(t, 'insight')) { ctx.L(nm(t) + ' 處於洞察狀態，免疫' + ST_NAME[f.st], 'ev'); continue; }
+          if (CONTROL[f.st] && has(t, 'insight')) { ctx.L(nm(t) + ' 處於洞察狀態，免疫' + ST_NAME[f.st], 'ev', { k: 'ev', a: UK(u), d: UK(t), s: '免疫' + ST_NAME[f.st] }); continue; }
           const key = sk.id + ':' + f.st;
           t.sts = t.sts.filter(s => s.key !== key);
           const rec = { key, st: f.st, v: f.v, left: f.dur || 1 };
@@ -192,13 +197,14 @@ var Battle = (function () {
           if (f.st === 'regen') rec.src = u;
           t.sts.push(rec);
           const stn = f.st === 'dmgDealt' && f.v < 0 ? '傷害降低' : f.st === 'dmgTaken' && f.v < 0 ? '減傷' : ST_NAME[f.st];
-          if (f.dur !== 99) ctx.L(nm(t) + ' 陷入' + stn + '狀態（' + sk.name + '）', CONTROL[f.st] ? 'ctl' : 'buff');
+          if (f.dur !== 99) ctx.L(nm(t) + ' 陷入' + stn + '狀態（' + sk.name + '）', CONTROL[f.st] ? 'ctl' : 'buff',
+            { k: 'st', a: UK(u), d: UK(t), s: stn, dur: f.dur || 1, ctl: CONTROL[f.st] ? 1 : 0, bad: (u.side !== t.side) ? 1 : 0, from: sk.name });
         }
       }
     }
   }
   function castSkill(ctx, u, sk, primary) {
-    ctx.L(nm(u) + ' 發動【' + sk.name + '】', u.side === 0 ? 'sk0' : 'sk1');
+    ctx.L(nm(u) + ' 發動【' + sk.name + '】', u.side === 0 ? 'sk0' : 'sk1', { k: 'cast', a: UK(u), s: sk.name, q: sk.q, ty: sk.type });
     applyFx(ctx, u, sk, primary);
   }
 
@@ -207,7 +213,7 @@ var Battle = (function () {
     if (controlled(u, 'confuse')) {
       const pool = ctx.sides[0].concat(ctx.sides[1]).filter(x => alive(x) && x !== u);
       tgt = pool.length ? pool[Math.floor(rnd() * pool.length)] : null;
-      if (tgt) ctx.L(nm(u) + ' 陷入混亂，攻擊了 ' + nm(tgt), 'ctl');
+      if (tgt) ctx.L(nm(u) + ' 陷入混亂，攻擊了 ' + nm(tgt), 'ctl', { k: 'ctl', a: UK(u), d: UK(tgt), s: '混亂' });
     } else {
       const en = ctx.enemies(u);
       const taunter = en.find(e => has(e, 'taunt'));
@@ -232,12 +238,12 @@ var Battle = (function () {
       if ((s.st === 'burn' || s.st === 'fear') && s.dmg > 0 && alive(u)) {
         const d = Math.max(1, Math.min(u.troops, Math.round(s.dmg * (0.9 + rnd() * 0.2))));
         u.troops -= d; u.wounded += d;
-        ctx.L(nm(u) + ' 受到' + ST_NAME[s.st] + '傷害 ' + d + '（剩餘 ' + u.troops + '）', 'dot');
-        if (!alive(u)) { ctx.L(nm(u) + ' 兵力耗盡，無法再戰', 'dead'); ctx.updatePos(); if (ctx.checkEnd()) return; return; }
+        ctx.L(nm(u) + ' 受到' + ST_NAME[s.st] + '傷害 ' + d + '（剩餘 ' + u.troops + '）', 'dot', { k: 'dmg', d: UK(u), v: d, n: u.troops, s: ST_NAME[s.st], dot: 1 });
+        if (!alive(u)) { ctx.L(nm(u) + ' 兵力耗盡，無法再戰', 'dead', { k: 'dead', d: UK(u) }); ctx.updatePos(); if (ctx.checkEnd()) return; return; }
       }
       if (s.st === 'regen' && alive(u)) heal(ctx, u, u, s.v, '休整');
     }
-    if (controlled(u, 'stun')) { ctx.L(nm(u) + ' 處於震懾狀態，無法行動', 'ctl'); return; }
+    if (controlled(u, 'stun')) { ctx.L(nm(u) + ' 處於震懾狀態，無法行動', 'ctl', { k: 'ctl', a: UK(u), s: '震懾' }); return; }
     // 主動戰法
     const silenced = controlled(u, 'silence');
     for (const sk of u.skills) {
@@ -250,18 +256,18 @@ var Battle = (function () {
       }
       if (silenced) continue;
       if (rnd() < sk.chance) {
-        if (sk.prep > 0) { u.prep[sk.id] = sk.prep; ctx.L(nm(u) + ' 開始準備【' + sk.name + '】', 'prep'); }
+        if (sk.prep > 0) { u.prep[sk.id] = sk.prep; ctx.L(nm(u) + ' 開始準備【' + sk.name + '】', 'prep', { k: 'prep', a: UK(u), s: sk.name }); }
         else { castSkill(ctx, u, sk); if (ctx.checkEnd()) return; }
       }
     }
     if (!alive(u) || ctx.over) return;
     // 普通攻擊 + 追擊 + 連擊
-    if (controlled(u, 'disarm')) { ctx.L(nm(u) + ' 處於繳械狀態，無法普通攻擊', 'ctl'); return; }
+    if (controlled(u, 'disarm')) { ctx.L(nm(u) + ' 處於繳械狀態，無法普通攻擊', 'ctl', { k: 'ctl', a: UK(u), s: '繳械' }); return; }
     let times = 1;
     const dbl = stSum(u, 'double');
     if (dbl > 0 && rnd() < dbl) times = 2;
     for (let k = 0; k < times && alive(u) && !ctx.over; k++) {
-      if (k === 1) ctx.L(nm(u) + ' 發動連擊', 'sk' + u.side);
+      if (k === 1) ctx.L(nm(u) + ' 發動連擊', 'sk' + u.side, { k: 'cast', a: UK(u), s: '連擊' });
       const tgt = normalAttack(ctx, u);
       if (ctx.checkEnd()) return;
       if (!tgt) break;
@@ -278,7 +284,7 @@ var Battle = (function () {
     for (const u of order) for (const sk of u.skills) {
       if (!sk.rfx || !alive(u) || ctx.over || r > (sk.rr || MAX_ROUNDS)) continue;
       if (sk.rp && rnd() >= sk.rp) continue;
-      ctx.L(nm(u) + ' 的【' + sk.name + '】生效', u.side === 0 ? 'sk0' : 'sk1');
+      ctx.L(nm(u) + ' 的【' + sk.name + '】生效', u.side === 0 ? 'sk0' : 'sk1', { k: 'cast', a: UK(u), s: sk.name, q: sk.q, ty: sk.type });
       applyFx(ctx, u, sk, null, sk.rfx);
       if (ctx.checkEnd()) return;
     }
@@ -308,7 +314,7 @@ var Battle = (function () {
     ctx.updatePos();
     // 準備回合：指揮、被動
     ctx.round = 0;
-    ctx.L('—— 準備回合 ——', 'round');
+    ctx.L('—— 準備回合 ——', 'round', { k: 'round', r: 0 });
     for (const S of [A, D]) {
       const m = S[0].morale;
       if (m < 100) ctx.L((S === A ? '【我】' : '【敵】') + '部隊士氣 ' + m + '，造成傷害 ' + Math.round(S[0].mf * 100) + '%', 'ctl');
@@ -319,7 +325,7 @@ var Battle = (function () {
     }
     for (let r = 1; r <= MAX_ROUNDS && !ctx.over; r++) {
       ctx.round = r;
-      ctx.L('—— 第 ' + r + ' 回合 ——', 'round');
+      ctx.L('—— 第 ' + r + ' 回合 ——', 'round', { k: 'round', r });
       roundEffects(ctx, r);
       if (ctx.over) break;
       const order = A.concat(D).filter(alive).map(u => ({ u, k: (has(u, 'first') ? 10000 : 0) + stat(u, 'spd') + rnd() * 3 }))
@@ -332,7 +338,7 @@ var Battle = (function () {
     }
     let winner = 'draw';
     if (ctx.over) winner = ctx.loser === 0 ? 'def' : 'atk';
-    if (ctx.log) ctx.L(winner === 'draw' ? '八回合未分勝負，雙方平局' : (winner === 'atk' ? '進攻方獲勝' : '防守方獲勝'), 'end');
+    if (ctx.log) ctx.L(winner === 'draw' ? '八回合未分勝負，雙方平局' : (winner === 'atk' ? '進攻方獲勝' : '防守方獲勝'), 'end', { k: 'end', w: winner });
     return { winner, rounds: ctx.round, A, D, log: ctx.log || [] };
   }
 

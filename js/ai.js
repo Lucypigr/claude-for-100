@@ -218,7 +218,7 @@ var AI = (function () {
         const f = arr[k];
         if (f.team >= 0) continue;
         if (main.adv < 5 && Game.tpl(main).star >= 3 && U.rnd() < 0.4 + pr.skill) Game.advanceHero(p, main.uid, f.uid);
-        else if (Game.tpl(f).star >= 3 && !p.lib.includes(Game.tpl(f).skill) && U.rnd() < pr.skill) Game.inheritHero(p, f.uid);
+        else if (Game.tpl(f).star >= 3 && !p.lib.includes(Game.tpl(f).inherit) && U.rnd() < pr.skill) Game.inheritHero(p, f.uid);
       }
     }
     // 演練：用閒置低星武將推進研究中的戰法
@@ -237,7 +237,7 @@ var AI = (function () {
       for (const h of idle) {
         if (rm <= 0) break;
         const t = Game.tpl(h);
-        if (t.star >= 4 && !p.lib.includes(t.skill) && pr.skill > 0.5) { if (Game.inheritHero(p, h.uid).ok) { rm--; continue; } }
+        if (t.star >= 4 && !p.lib.includes(t.inherit) && pr.skill > 0.5) { if (Game.inheritHero(p, h.uid).ok) { rm--; continue; } }
         if (t.star <= 3 || U.rnd() < 0.2) { if (Game.convertHero(p, h.uid).ok) rm--; }
       }
     }
@@ -294,7 +294,7 @@ var AI = (function () {
     const t = Game.tpl(h);
     let v = SKILL_VALUE[s.q] * 2;
     let intish = 0, physish = 0;
-    for (const f of s.fx) {
+    for (const f of s.rfx ? s.fx.concat(s.rfx) : s.fx) {
       if (f.k === 'dmg') { if (f.t === 'int') intish++; else physish++; }
       if ((f.k === 'buff') && f.stat === 'int') intish += 0.5;
       if ((f.k === 'buff') && f.stat === 'atk') physish += 0.5;
@@ -302,7 +302,7 @@ var AI = (function () {
     if (t.role === 'int') v += intish * 1.5 - physish * 1.2;
     else v += physish * 1.5 - intish * 1.2;
     if (s.type === 'command' || s.type === 'passive') v += 0.6;
-    if (s.fx.some(f => f.k === 'heal') && t.role === 'int') v += 1;
+    if ((s.fx.some(f => f.k === 'heal') || (s.rfx || []).some(f => f.k === 'heal')) && t.role === 'int') v += 1;
     return v;
   }
 

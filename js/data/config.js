@@ -55,14 +55,14 @@ var CFG = {
   // 戰法等級 1~10：效果 75%~100%；升級消耗戰法點
   SKILL_MAX_LV: 10,
   skillScale: function (lv) { return 0.75 + 0.25 * (Math.max(1, Math.min(10, lv || 10)) - 1) / 9; },
-  SKILL_UP_BASE: { S: 60, A: 45, B: 30 },
+  SKILL_UP_BASE: { S: 60, A: 45, B: 30, C: 20, D: 15 },
   skillUpCost: function (q, lv) { return Math.round(this.SKILL_UP_BASE[q] * Math.pow(lv, 1.5) / 10) * 10; }, // lv → lv+1
   SKILL_REFUND: 0.5,        // 更換/遺忘戰法返還 50% 已投入戰法點
   SKP_START: 2000,
   DAILY_SKP: 800,
   CONVERT_PTS: [0, 100, 250, 600, 1500, 3500], // 依星級轉化戰法點（另加等級）
   // 演練：傳承取得的戰法需演練至 100% 才能使用
-  INHERIT_PROG: { B: 100, A: 50, S: 25 },
+  INHERIT_PROG: { D: 100, C: 100, B: 100, A: 50, S: 25 },
   DRILL_PROG: [0, 5, 10, 20, 40, 70],          // 依素材星級增加演練進度
   // 行軍：每格分鐘數
   minPerTile: function (spd) { return 240 / (Math.max(20, spd) + 60); },

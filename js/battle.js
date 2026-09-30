@@ -22,13 +22,15 @@ var Battle = (function () {
     const key = id + '@' + lv;
     if (scaledCache[key]) return scaledCache[key];
     const sc = CFG.skillScale(lv);
-    const sk = Object.assign({}, base, { lv, fx: base.fx.map(f => {
+    const scale = fx => fx.map(f => {
       const g = Object.assign({}, f);
       if (f.k === 'dmg' || f.k === 'heal') g.rate = f.rate * sc;
       else if (f.k === 'buff' || f.k === 'debuff') { if (f.v) g.v = f.v * sc; if (f.pct) g.pct = f.pct * sc; }
       else if (f.k === 'st' && SCALED_V[f.st] && f.v !== undefined) g.v = f.v * sc;
       return g;
-    }) });
+    });
+    const sk = Object.assign({}, base, { lv, fx: scale(base.fx) });
+    if (base.rfx) sk.rfx = scale(base.rfx);
     scaledCache[key] = sk;
     return sk;
   }
@@ -155,10 +157,10 @@ var Battle = (function () {
     return h;
   }
 
-  function applyFx(ctx, u, sk, primary) {
+  function applyFx(ctx, u, sk, primary, list) {
     const range = sk.range || 5;
     const cache = {}; // 同一戰法中相同目標代號沿用同一批目標
-    for (const f of sk.fx) {
+    for (const f of list || sk.fx) {
       if (f.k === 'range') { u.range += f.v; continue; }
       let tg;
       if (cache[f.tgt]) tg = cache[f.tgt].filter(alive);
@@ -189,7 +191,8 @@ var Battle = (function () {
           }
           if (f.st === 'regen') rec.src = u;
           t.sts.push(rec);
-          if (f.dur !== 99) ctx.L(nm(t) + ' 陷入' + ST_NAME[f.st] + '狀態（' + sk.name + '）', CONTROL[f.st] ? 'ctl' : 'buff');
+          const stn = f.st === 'dmgDealt' && f.v < 0 ? '傷害降低' : f.st === 'dmgTaken' && f.v < 0 ? '減傷' : ST_NAME[f.st];
+          if (f.dur !== 99) ctx.L(nm(t) + ' 陷入' + stn + '狀態（' + sk.name + '）', CONTROL[f.st] ? 'ctl' : 'buff');
         }
       }
     }
@@ -269,6 +272,18 @@ var Battle = (function () {
     }
   }
 
+  // 指揮/被動戰法的每回合效果（rfx）：rp 為每回合觸發機率、rr 為生效回合數
+  function roundEffects(ctx, r) {
+    const order = ctx.sides[0].concat(ctx.sides[1]).filter(alive).sort((a, b) => stat(b, 'spd') - stat(a, 'spd'));
+    for (const u of order) for (const sk of u.skills) {
+      if (!sk.rfx || !alive(u) || ctx.over || r > (sk.rr || MAX_ROUNDS)) continue;
+      if (sk.rp && rnd() >= sk.rp) continue;
+      ctx.L(nm(u) + ' 的【' + sk.name + '】生效', u.side === 0 ? 'sk0' : 'sk1');
+      applyFx(ctx, u, sk, null, sk.rfx);
+      if (ctx.checkEnd()) return;
+    }
+  }
+
   function tickDurations(ctx) {
     for (const s of ctx.sides) for (const u of s) {
       u.buffs = u.buffs.filter(b => b.left >= 99 || --b.left > 0);
@@ -300,11 +315,13 @@ var Battle = (function () {
     }
     const all = A.concat(D).sort((a, b) => stat(b, 'spd') - stat(a, 'spd'));
     for (const u of all) for (const sk of u.skills) {
-      if (sk.type === 'command' || sk.type === 'passive') castSkill(ctx, u, sk);
+      if ((sk.type === 'command' || sk.type === 'passive') && sk.fx.length) castSkill(ctx, u, sk);
     }
     for (let r = 1; r <= MAX_ROUNDS && !ctx.over; r++) {
       ctx.round = r;
       ctx.L('—— 第 ' + r + ' 回合 ——', 'round');
+      roundEffects(ctx, r);
+      if (ctx.over) break;
       const order = A.concat(D).filter(alive).map(u => ({ u, k: (has(u, 'first') ? 10000 : 0) + stat(u, 'spd') + rnd() * 3 }))
         .sort((a, b) => b.k - a.k).map(o => o.u);
       for (const u of order) {

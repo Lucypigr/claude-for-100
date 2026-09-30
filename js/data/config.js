@@ -2,7 +2,9 @@
 'use strict';
 
 var CFG = {
-  MAP_N: 300,               // 地圖邊長（格）
+  MAP_N: 300,               // 地圖邊長（格），150 位 AI 的標準大小
+  // AI 越多地圖越大：維持每位主公可用面積約與 150 位時相同
+  mapSizeFor: function (aiCount) { return aiCount <= 150 ? 300 : Math.round(300 * Math.sqrt((aiCount + 1) / 151) / 10) * 10; },
   AI_COUNT: 150,            // AI 玩家數
   TICK_MIN: 1,              // 模擬步長（遊戲分鐘）
   BASE_SPEED: 1,            // 1 真實秒 = 1 遊戲分鐘

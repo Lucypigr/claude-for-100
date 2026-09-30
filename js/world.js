@@ -198,7 +198,9 @@ var World = (function () {
       const cap = placeCity(s.type === 'center' ? 'luoyang' : 'capital', capLvl, cx, cy, 5, s.id, names.shift());
       s.capital = cap.id;
       // 州內其他城池
-      const nCom = 2, nCounty = s.type === 'birth' ? 6 : 4;
+      // 地圖放大時城池數量依面積等比增加
+      const area = (N / 300) * (N / 300);
+      const nCom = Math.round(2 * area), nCounty = Math.round((s.type === 'birth' ? 6 : 4) * area);
       const plan = [];
       for (let k = 0; k < nCom; k++) plan.push(['commandery', s.type === 'birth' ? 7 : 8]);
       for (let k = 0; k < nCounty; k++) plan.push(['county', s.type === 'birth' ? (k < 3 ? 5 : 6) : 6]);
@@ -211,7 +213,7 @@ var World = (function () {
           const x = Math.round(s.sx + Math.cos(ang) * rad), y = Math.round(s.sy + Math.sin(ang) * rad);
           if (!inb(x, y)) continue;
           if (footprintOk(x, y, 3, s.id, 14)) {
-            placeCity(type, lvl, x, y, 3, s.id, names.length ? names.shift() : s.name.slice(0, 1) + '城');
+            placeCity(type, lvl, x, y, 3, s.id, names.length ? names.shift() : s.name.slice(0, 1) + '城' + '甲乙丙丁戊己庚辛壬癸'[(s.extra = (s.extra || 0) + 1) % 10]);
             placed = true;
           }
         }
@@ -235,6 +237,9 @@ var World = (function () {
       }
     }
     const passNames = PASS_NAMES.slice();
+    // 官方關名用完時（大地圖），以兩州首字命名：如「涼雍關」，重複則加序號
+    const passUsed = {};
+    const uniqPass = base => { const k = passUsed[base] = (passUsed[base] || 0) + 1; return base + (k > 1 ? '二三四五六七八九十'[k - 2] || k : '') + '關'; };
     W.passes = [];
     for (const [key, cnt] of pairCount) {
       if (cnt < 12) continue;
@@ -268,7 +273,7 @@ var World = (function () {
         let lvl = 7;
         if (sa.type === 'center' || sb.type === 'center') lvl = 9;
         else if (sa.type === 'resource' || sb.type === 'resource') lvl = 8;
-        const pc = placeCity('pass', lvl, cx, cy, 3, T.state[c], passNames.length ? passNames.splice(Math.floor(rng() * passNames.length), 1)[0] : '關');
+        const pc = placeCity('pass', lvl, cx, cy, 3, T.state[c], passNames.length ? passNames.splice(Math.floor(rng() * passNames.length), 1)[0] : uniqPass(sa.name[0] + sb.name[0]));
         pc.link = [a, b];
         W.passes.push(pc.id);
         // 開鑿兩側通道

@@ -11,14 +11,16 @@ var Game = (function () {
     opts = opts || {};
     const seed = opts.seed || (Date.now() & 0x7fffffff);
     U.setSeed(seed ^ 0x5bd1e995);
-    World.generate(seed, opts.mapN || CFG.MAP_N);
+    const aiN = opts.aiCount === undefined ? CFG.AI_COUNT : opts.aiCount;
+    const mapN = opts.mapN || CFG.mapSizeFor(aiN);
+    World.generate(seed, mapN);
     T = World.T;
     Object.assign(G, {
       version: 1, seed, time: 0, acc: 0, speed: 1, paused: false,
       players: [], alliances: [], marches: [], nextMarch: 1, reports: [], nextReport: 1,
       chat: { world: [], sys: [], ally: {} }, notices: [], news: [],
       landSiege: {}, over: false, winner: -1, userId: 0, dirty: [], fx: [], lastDay: 0, rankCache: null, invites: [],
-      aiCount: opts.aiCount === undefined ? CFG.AI_COUNT : opts.aiCount,
+      aiCount: aiN, mapN,
     });
     P = G.players;
     landPos = new Int32Array(World.N * World.N).fill(-1);

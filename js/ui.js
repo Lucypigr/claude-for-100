@@ -1135,8 +1135,8 @@ var UI = (function () {
   // 推薦戰法：排除該武將已自帶的戰法
   function recFor(h) {
     const t = Game.tpl(h), r = RECOMMEND[t.name];
-    if (!r) return { skills: [], why: '' };
-    return { skills: r.skills.filter(id => id !== t.skill), why: r.why };
+    if (!r) return { skills: [], why: '', web: false };
+    return { skills: r.skills.filter(id => id !== t.skill), why: r.why, web: r.web };
   }
 
   function heroDetail() {
@@ -1181,7 +1181,7 @@ var UI = (function () {
     // 推薦戰法
     const rec = recFor(h);
     if (rec.skills.length) {
-      o += '<div class="sec-t">推薦戰法</div><div class="muted" style="font-size:12px">' + rec.why + '</div>';
+      o += '<div class="sec-t">推薦戰法' + (rec.web ? ' <span class="st" style="background:#2f6b3a">參考社群攻略</span>' : '') + '</div><div class="muted" style="font-size:12px">' + rec.why + '</div>';
       for (const sid of rec.skills) {
         const sk = SKILLS[sid];
         const has = user.lib.includes(sid), equipped = h.sk.includes(sid);

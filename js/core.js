@@ -460,6 +460,31 @@ var Game = (function () {
     p.skp += n;
     return ok({ pts: n });
   }
+  // 一鍵分解：mode 'low' = 閒置的 2、3 星武將全部轉化；
+  // mode 'keep1' = 3、4 星每種武將保留一張（優先保留上陣者，其次進階/等級最高者），其餘閒置武將全部轉化
+  function bulkConvertPlan(p, mode) {
+    const list = [];
+    if (mode === 'low') {
+      for (const h of p.heroes) if (h.team < 0 && (tpl(h).star === 2 || tpl(h).star === 3)) list.push(h);
+    } else {
+      const by = {};
+      for (const h of p.heroes) { const st = tpl(h).star; if (st === 3 || st === 4) (by[h.t] = by[h.t] || []).push(h); }
+      for (const t in by) {
+        const arr = by[t].slice().sort((a, b) => (b.team >= 0) - (a.team >= 0) || b.adv - a.adv || b.lv - a.lv || b.exp - a.exp);
+        for (const h of arr.slice(1)) if (h.team < 0) list.push(h);
+      }
+    }
+    let pts = 0;
+    for (const h of list) pts += Math.round(convertValue(h));
+    return { list, pts };
+  }
+  function bulkConvert(p, mode) {
+    const plan = bulkConvertPlan(p, mode);
+    if (!plan.list.length) return err('沒有可分解的武將');
+    for (const h of plan.list) removeHero(p, h);
+    p.skp += plan.pts;
+    return ok({ n: plan.list.length, pts: plan.pts });
+  }
   function skillInvested(q, lv) { let s = 0; for (let l = 1; l < lv; l++) s += CFG.skillUpCost(q, l); return s; }
   function upgradeSkill(p, uid, k) {
     const h = heroByUid(p, uid);
@@ -1580,7 +1605,7 @@ var Game = (function () {
     addHero, heroByUid, tpl, heroCap, heroRoom, heroStats, freePoints, getSta, gainExp, slotUnlocked,
     drawPack, advanceHero, inheritHero, learnSkill, addPoint, resetPoints,
     awakenHero, awakenFodder, eventStatus, exchangeEvent,
-    drillSkill, convertHero, convertValue, upgradeSkill, skillInvested, teamWounded, healTime,
+    drillSkill, convertHero, bulkConvertPlan, bulkConvert, convertValue, upgradeSkill, skillInvested, teamWounded, healTime,
     // 部隊
     teamCount, costCap, teamHeroes, teamBonus, teamCost, teamTroops, teamCapTroops, teamMinSta, teamSpeed, teamUnits, teamPower, teamReady,
     setSlot, autoFillTeam, recruit, recruitCost,

@@ -604,6 +604,19 @@ var UI = (function () {
         }
         break;
       }
+      case 'bulklow': case 'bulkkeep': {
+        const mode = act === 'bulklow' ? 'low' : 'keep1';
+        const plan = Game.bulkConvertPlan(user, mode);
+        if (!plan.list.length) { toast('沒有可分解的武將（上陣中的武將不會被分解）', 'warn'); break; }
+        const cnt = {};
+        plan.list.forEach(x => { const k = Game.tpl(x).star + '★'; cnt[k] = (cnt[k] || 0) + 1; });
+        const sum = Object.keys(cnt).sort().map(k => k + ' ×' + cnt[k]).join('、');
+        if (!ask((mode === 'low' ? '一鍵分解閒置的 2★、3★ 武將' : '3★、4★ 每種武將保留一張，其餘閒置武將分解') + '：共 ' + plan.list.length + ' 名（' + sum + '），可獲得 ' + U.fmtFull(plan.pts) + ' 戰法點。此操作無法復原，確定嗎？')) break;
+        const r = Game.bulkConvert(user, mode);
+        toast(r.ok ? '已分解 ' + r.n + ' 名武將，獲得戰法點 ' + U.fmtFull(r.pts) : r.msg, r.ok ? 'good' : 'warn');
+        if (r.ok && !Game.heroByUid(user, heroSel)) heroSel = 0;
+        refreshPanel(); break;
+      }
       case 'drill': case 'drillhero': {
         const sid = act === 'drill' ? d.sid : panelArg && panelArg.drill;
         const h = Game.heroByUid(user, +d.uid);
@@ -801,6 +814,7 @@ var UI = (function () {
       const shown = list.filter(h => flt === 'all' || (flt === 'team' ? h.team >= 0 : (flt.length === 1 && '漢魏蜀吳群'.includes(flt) ? Game.tpl(h).faction === flt : Game.tpl(h).troop === flt)));
       let h = '<div class="hero-layout"><div style="display:flex;flex-direction:column;min-height:0">';
       h += '<div class="filter">' + [['all', '全部'], ['team', '上陣'], ['漢', '漢'], ['魏', '魏'], ['蜀', '蜀'], ['吳', '吳'], ['群', '群'], ['騎', '騎兵'], ['步', '步兵'], ['弓', '弓兵']].map(([k, n]) => '<button data-act="hfilter" data-f="' + k + '" class="' + (flt === k ? 'on' : '') + '">' + n + '</button>').join('') + '<span class="muted" style="margin-left:8px">共 ' + user.heroes.length + ' 名</span></div>';
+      h += '<div class="filter"><button class="btn small dark" data-act="bulklow" title="閒置的 2、3 星武將全部轉化為戰法點">一鍵分解 2★3★</button><button class="btn small dark" data-act="bulkkeep" title="3、4 星每種武將保留一張，其餘閒置的全部轉化">3★4★ 保留一張其餘分解</button></div>';
       h += '<div class="hero-list" data-keep="hl">' + shown.map(x => heroCardHtml(x, { act: 'hero', sel: x.uid === heroSel })).join('') + '</div></div>';
       h += '<div class="hdetail">' + heroDetail() + '</div></div>';
       return h;
@@ -1118,6 +1132,13 @@ var UI = (function () {
     return '<div class="bu" style="border-top:3px solid ' + col + faceStyle(HERO_BY_NAME[u.name]) + '"><b>' + E(u.name) + '</b>Lv' + u.lv + ' ' + u.troop + '<br><span class="' + (u.end > 0 ? '' : 'bad') + '">' + u.end + '</span><span class="muted">/' + u.start + '</span></div>';
   }
 
+  // 推薦戰法：排除該武將已自帶的戰法
+  function recFor(h) {
+    const t = Game.tpl(h), r = RECOMMEND[t.name];
+    if (!r) return { skills: [], why: '' };
+    return { skills: r.skills.filter(id => id !== t.skill), why: r.why };
+  }
+
   function heroDetail() {
     const h = Game.heroByUid(user, heroSel);
     if (!h) return '<div class="muted">選擇武將查看詳情</div>';
@@ -1152,8 +1173,23 @@ var UI = (function () {
     }
     if (panelArg && panelArg.learn) {
       o += '<div class="sec-t" style="font-size:15px">選擇要學習的戰法</div><div class="muted" style="font-size:12px">新學的戰法從 1 級開始；更換或遺忘會返還原戰法 ' + Math.round(CFG.SKILL_REFUND * 100) + '% 已投入戰法點。</div>';
-      const opts = user.lib.filter(id => !h.sk.includes(id)).map(id => SKILLS[id]).filter(sk => !sk.troops || sk.troops.includes(t.troop));
-      o += opts.map(sk => '<div class="skslot" style="cursor:pointer" data-act="learn" data-k="' + panelArg.learn + '" data-sid="' + sk.id + '"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span><div class="sd">' + sk.desc + '</div></div>').join('') || '<div class="muted">沒有可學習的戰法（可透過傳承獲得，A/S 級戰法需演練至 100%）</div>';
+      const rec = recFor(h);
+      const opts = user.lib.filter(id => !h.sk.includes(id)).map(id => SKILLS[id]).filter(sk => !sk.troops || sk.troops.includes(t.troop))
+        .sort((a, b) => rec.skills.includes(b.id) - rec.skills.includes(a.id));
+      o += opts.map(sk => '<div class="skslot" style="cursor:pointer" data-act="learn" data-k="' + panelArg.learn + '" data-sid="' + sk.id + '"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span>' + (rec.skills.includes(sk.id) ? '<span class="st" style="background:#2f6b3a">推薦</span>' : '') + '<div class="sd">' + sk.desc + (rec.skills.includes(sk.id) ? '<br><span class="good">推薦原因：' + rec.why + '</span>' : '') + '</div></div>').join('') || '<div class="muted">沒有可學習的戰法（可透過傳承獲得，A/S 級戰法需演練至 100%）</div>';
+    }
+    // 推薦戰法
+    const rec = recFor(h);
+    if (rec.skills.length) {
+      o += '<div class="sec-t">推薦戰法</div><div class="muted" style="font-size:12px">' + rec.why + '</div>';
+      for (const sid of rec.skills) {
+        const sk = SKILLS[sid];
+        const has = user.lib.includes(sid), equipped = h.sk.includes(sid);
+        const emptyK = [1, 2].find(k => Game.slotUnlocked(h, k) && !h.sk[k]);
+        o += '<div class="skslot"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span>' +
+          (equipped ? ' <span class="good" style="font-size:12px">已裝備</span>' : has ? (emptyK ? ' <button class="btn small green" data-act="learn" data-k="' + emptyK + '" data-sid="' + sid + '">裝備</button>' : ' <span class="muted" style="font-size:12px">已擁有（可在上方「更換」）</span>') : ' <span class="muted" style="font-size:12px">尚未擁有（傳承或演練取得）</span>') +
+          '<div class="sd">' + sk.desc + '</div></div>';
+      }
     }
     // 進階/傳承
     const dupes = user.heroes.filter(x => x !== h && x.t === h.t && x.team < 0);

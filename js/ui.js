@@ -119,7 +119,10 @@ var UI = (function () {
     hudToasts();
     if (panel && now - lastPanelRefresh > 1000 && !$('#modal').classList.contains('hidden')) {
       lastPanelRefresh = now;
-      if (['city', 'teams', 'season', 'alliance', 'quests'].includes(panel) && !teamPick) refreshPanel(true);
+      // 正在面板輸入框打字時不重繪，否則輸入框會被清空、失去焦點
+      const ae = document.activeElement;
+      const typing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && $('#modal').contains(ae);
+      if (['city', 'teams', 'season', 'alliance', 'quests'].includes(panel) && !teamPick && !typing) refreshPanel(true);
     }
     if (tileSel >= 0 && now - (update.tp || 0) > 1000) { update.tp = now; if (tilePopMode === 'info') renderTilePop(); }
     if (G.over && !update.shownOver) { update.shownOver = true; openPanel('settle'); }
@@ -713,7 +716,16 @@ var UI = (function () {
     const scrollers = {};
     body.querySelectorAll('[data-keep]').forEach(el => { scrollers[el.dataset.keep] = el.scrollTop; });
     const f = PANELS[panel];
+    // 重繪會重建輸入框：先記下內容與焦點，重繪後還原
+    const fields = {};
+    body.querySelectorAll('input[id],textarea[id]').forEach(el => { if (el.type !== 'checkbox') fields[el.id] = { v: el.value, f: el === document.activeElement, s: el.selectionStart, e: el.selectionEnd }; });
     body.innerHTML = f ? f() : '';
+    for (const id in fields) {
+      const el = document.getElementById(id);
+      if (!el || !body.contains(el)) continue;
+      el.value = fields[id].v;
+      if (fields[id].f) { el.focus(); try { el.setSelectionRange(fields[id].s, fields[id].e); } catch (e) { /* */ } }
+    }
     body.querySelectorAll('[data-keep]').forEach(el => { if (scrollers[el.dataset.keep] !== undefined) el.scrollTop = scrollers[el.dataset.keep]; });
     if (soft) body.scrollTop = st;
     if (panel === 'settings') fillHist('#save-hist');

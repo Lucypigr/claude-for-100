@@ -90,3 +90,21 @@ for (const h of S.HEROES) {
   if (!r.ok || u4.heroes.length !== before + 1 || Math.round(u4.honor) !== 0) throw new Error('exchange failed ' + JSON.stringify(r));
   console.log('yellow camps + honor exchange OK (' + n + ' camps)');
 }
+
+// 卡池：百連保底 5 位五星、至尊卡池五抽全五星
+{
+  const G5 = S.Game.newGame({ seed: 61, userName: '抽卡測試' });
+  const u5 = G5.players[G5.userId];
+  u5.gold = 5000000;
+  for (let k = 0; k < 40; k++) {
+    const r = S.Game.drawPack(u5, 'gold100');
+    if (!r.ok || r.heroes.length !== 100) throw new Error('gold100 draw');
+    const n5 = r.heroes.filter(h => S.Game.tpl(h).star === 5).length;
+    if (n5 < 5) throw new Error('pity broken ' + n5);
+  }
+  const e = S.Game.drawPack(u5, 'elite5');
+  if (!e.ok || e.heroes.length !== 5 || e.heroes.some(h => S.Game.tpl(h).star !== 5)) throw new Error('elite5 not all 5 star');
+  u5.gold = 9999;
+  if (S.Game.drawPack(u5, 'elite5').ok) throw new Error('elite5 should need 10000');
+  console.log('gacha pity + elite pool OK');
+}

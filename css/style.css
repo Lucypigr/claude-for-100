@@ -492,3 +492,17 @@ table.tbl tr:hover td { background: rgba(141, 107, 51, 0.12); }
   .rp-caption { bottom: 94px; font-size: 12px; }
 }
 .pack.elite { background: linear-gradient(135deg, rgba(150, 100, 20, 0.55), rgba(30, 18, 6, 0.85)); border-color: #ffd35a; box-shadow: 0 0 14px rgba(255, 211, 90, 0.35); }
+
+/* 觸控裝置：放大按鈕的可點範圍（至少約 40px），避免手機難按 */
+@media (pointer: coarse) {
+  .btn { min-height: 40px; padding-top: 8px; padding-bottom: 8px; touch-action: manipulation; }
+  .btn.small { min-height: 38px; padding: 6px 12px; font-size: 14px; }
+  .btn.pbtn { min-width: 44px; }
+  .filter button { min-height: 36px; padding: 6px 12px; font-size: 14px; touch-action: manipulation; }
+  .win .close { width: 44px; height: 44px; font-size: 20px; }
+  .hcard, .tcard, .skslot, .drill button, .mbtn, #maptools .tool, #speed button, .link { touch-action: manipulation; }
+  #speed button { min-height: 32px; min-width: 38px; }
+  table.tbl td .btn { margin: 2px 0; }
+  .tp-b .btn, #tilepop .btn { min-height: 42px; }
+}
+.hcard.dim { opacity: 0.5; }

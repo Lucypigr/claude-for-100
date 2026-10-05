@@ -37,6 +37,7 @@ var UI = (function () {
     if (auto && Game.hasSave()) setTimeout(continueGame, 0);
     document.addEventListener('click', onClick);
     trackPress();
+    window.addEventListener('resize', () => setTimeout(placeTeamPanel, 50));
     // 圖鑑搜尋：只更新清單，不重建整頁（輸入框才不會失去焦點）
     document.addEventListener('input', e => {
       if (e.target.id !== 'codex-q' && e.target.id !== 'codex-sq') return;
@@ -232,6 +233,15 @@ var UI = (function () {
     });
     // 內容沒變就不重建，且按住滑鼠/手指時不重建，避免點擊落在被替換掉的按鈕上
     setHtml($('#teampanel'), h);
+    placeTeamPanel();
+  }
+  // 手機直屏：資源列會折成 2~3 列，隊伍面板要排在資源列正下方，否則「自動增兵」列會被蓋住
+  function placeTeamPanel() {
+    const tp = $('#teampanel'), rb = $('#resbar');
+    if (!tp || !rb) return;
+    if (!matchMedia('(max-width: 600px) and (orientation: portrait)').matches) { if (tp.style.top) tp.style.top = ''; return; }
+    const want = Math.ceil(rb.getBoundingClientRect().bottom + 6) + 'px';
+    if (tp.style.top !== want) tp.style.top = want;
   }
   function hudAlert() {
     const threats = G.marches.filter(m => m.type === 'attack' && m.pid !== user.id && Game.tileOwner(m.to) === user.id);

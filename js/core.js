@@ -197,6 +197,81 @@ var Game = (function () {
     return teamMinSta(p, team) >= (staNeed || CFG.COST_ATTACK);
   }
 
+  // ===== 隊伍配置：儲存目前陣容，體力不夠時一鍵換上另一組 =====
+  const PRESET_MAX = 8;
+  function savePreset(p, ti, name) {
+    const team = p.teams[ti];
+    if (!team || !team.slots.some(Boolean)) return err('這支部隊沒有武將');
+    if (!p.presets) p.presets = [];
+    const slots = team.slots.slice();
+    const same = p.presets.findIndex(x => x.slots.join() === slots.join());
+    const nm = (name || '').trim().slice(0, 8) || '配置' + (p.presets.length + 1);
+    if (same >= 0) { p.presets[same].name = nm; return ok({ idx: same, replaced: true }); }
+    if (p.presets.length >= PRESET_MAX) return err('最多儲存 ' + PRESET_MAX + ' 組配置，請先刪除舊的');
+    p.presets.push({ name: nm, slots });
+    return ok({ idx: p.presets.length - 1 });
+  }
+  function deletePreset(p, idx) {
+    if (!p.presets || !p.presets[idx]) return err('配置不存在');
+    p.presets.splice(idx, 1);
+    return ok();
+  }
+  // 配置裡的武將是否都能用在這支部隊：存在，且不在別支部隊
+  function presetUsable(p, ti, pr) {
+    for (const uid of pr.slots) {
+      if (!uid) continue;
+      const h = heroByUid(p, uid);
+      if (!h) return false;
+      if (h.team >= 0 && h.team !== ti) return false;
+    }
+    return pr.slots.some(Boolean) && !!heroByUid(p, pr.slots[0]);
+  }
+  function applyPreset(p, ti, idx) {
+    const team = p.teams[ti];
+    const pr = p.presets && p.presets[idx];
+    if (!team || !pr) return err('配置不存在');
+    if (team.status !== 'idle' || team.rq) return err('部隊出征或征兵中，無法換隊');
+    if (team.base !== p.cityTile) return err('部隊需在主城才能換隊');
+    if (!presetUsable(p, ti, pr)) return err('配置中的武將不存在或在其他部隊');
+    const old = team.slots.slice();
+    for (let s = 0; s < 3; s++) { const h = heroByUid(p, team.slots[s]); if (h) h.team = -1; team.slots[s] = 0; }
+    for (let s = 0; s < 3; s++) {
+      if (!pr.slots[s]) continue;
+      const r = setSlot(p, ti, s, pr.slots[s]);
+      if (!r.ok) { // 失敗（例如統御不足）：還原
+        for (let k = 0; k < 3; k++) { const h = heroByUid(p, team.slots[k]); if (h) h.team = -1; team.slots[k] = 0; }
+        for (let k = 0; k < 3; k++) if (old[k]) setSlot(p, ti, k, old[k]);
+        return r;
+      }
+    }
+    return ok({ name: pr.name });
+  }
+  function presetStamina(p, pr) { let s = 999; for (const uid of pr.slots) { const h = heroByUid(p, uid); if (h) s = Math.min(s, getSta(h)); } return s === 999 ? 0 : s; }
+  function presetTroops(p, pr) { let t = 0, c = 0; for (const uid of pr.slots) { const h = heroByUid(p, uid); if (h) { t += h.troops; c += heroCap(p, h); } } return c ? t / c : 0; }
+  // 一鍵換隊：換上體力足夠、兵力最多的另一組配置
+  function swapTired(p, ti) {
+    const team = p.teams[ti];
+    if (!team) return err('部隊不存在');
+    if (!p.presets || !p.presets.length) return err('還沒有儲存的配置，請先在「部隊」頁儲存');
+    if (team.status !== 'idle' || team.rq) return err('部隊出征或征兵中，無法換隊');
+    if (team.base !== p.cityTile) return err('部隊需在主城才能換隊');
+    const cur = team.slots.join();
+    let best = -1, bs = -1;
+    p.presets.forEach((pr, k) => {
+      if (pr.slots.join() === cur || !presetUsable(p, ti, pr)) return;
+      const sta = presetStamina(p, pr);
+      if (sta < CFG.COST_ATTACK) return;
+      const v = sta + presetTroops(p, pr) * 100;
+      if (v > bs) { bs = v; best = k; }
+    });
+    if (best < 0) return err('沒有體力足夠、可換上的配置');
+    return applyPreset(p, ti, best);
+  }
+  // 通緝中的劫掠客（頭銜為劫掠客的玩家）
+  function wantedList() {
+    return P.filter(q => q.title === '劫掠客' && q.id !== G.userId);
+  }
+
   function setSlot(p, ti, slot, uid) {
     const team = p.teams[ti];
     if (!team) return err('部隊不存在');
@@ -1313,7 +1388,7 @@ var Game = (function () {
   }
 
   // ================= 聊天 / 通知 =================
-  function sys(ch, text) { pushChat(ch === 'world' ? G.chat.world : G.chat.sys, { t: G.time, from: -1, name: '系統', text, sys: true }); }
+  function sys(ch, text, pid) { const m = { t: G.time, from: -1, name: '系統', text, sys: true }; if (pid !== undefined) m.pid = pid; pushChat(ch === 'world' ? G.chat.world : G.chat.sys, m); }
   function sysAlly(aid, text) { if (aid < 0) return; if (!G.chat.ally[aid]) G.chat.ally[aid] = []; pushChat(G.chat.ally[aid], { t: G.time, from: -1, name: '同盟', text, sys: true }); }
   function say(p, ch, text) {
     const msg = { t: G.time, from: p.id, name: p.name, text, tag: p.alliance >= 0 ? G.alliances[p.alliance].name : '' };
@@ -1605,6 +1680,7 @@ var Game = (function () {
     addHero, heroByUid, tpl, heroCap, heroRoom, heroStats, freePoints, getSta, gainExp, slotUnlocked,
     drawPack, advanceHero, inheritHero, learnSkill, addPoint, resetPoints,
     awakenHero, awakenFodder, eventStatus, exchangeEvent,
+    savePreset, deletePreset, applyPreset, swapTired, presetStamina, wantedList,
     drillSkill, convertHero, bulkConvertPlan, bulkConvert, convertValue, upgradeSkill, skillInvested, teamWounded, healTime,
     // 部隊
     teamCount, costCap, teamHeroes, teamBonus, teamCost, teamTroops, teamCapTroops, teamMinSta, teamSpeed, teamUnits, teamPower, teamReady,

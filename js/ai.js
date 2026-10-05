@@ -1395,7 +1395,7 @@ var AI = (function () {
       r.flag = true;
       att.title = '劫掠客';
       later(witness, 'world', U.pick(CHAT.raiderExpose).replace('{n}', att.name).replace('{k}', k), U.rint(0, 3));
-      Game.sys('world', '【通緝】' + att.name + ' 被指認為劫掠客！專門欺負新手與弱小玩家');
+      Game.sys('world', '【通緝】' + att.name + ' 被指認為劫掠客！專門欺負新手與弱小玩家', att.id);
     } else later(witness, 'world', U.pick(CHAT.raiderCallout).replace('{n}', att.name).replace('{k}', k), U.rint(0, 3));
     // 嚴重程度越高，越容易引來全服討伐
     const active = (g.hunts || []).some(h => !h.over && h.id === att.id);
@@ -1407,7 +1407,7 @@ var AI = (function () {
     r.lastHunt = g.time;
     if (!g.hunts) g.hunts = [];
     g.hunts.push({ id: att.id, since: g.time, until: g.time + 2880, sev: r.sev, over: false });
-    Game.sys('world', '【討伐令】全服討伐劫掠客 ' + att.name + '！' + (att.alliance >= 0 ? '〔' + g.alliances[att.alliance].name + '〕' : ''));
+    Game.sys('world', '【討伐令】全服討伐劫掠客 ' + att.name + '！' + (att.alliance >= 0 ? '〔' + g.alliances[att.alliance].name + '〕' : ''), att.id);
     if (caller && caller.ai) later(caller, 'world', U.pick(CHAT.huntDeclare).replace('{n}', att.name), U.rint(1, 6));
     let joined = 0, shouted = 0;
     for (const q of Game.P) {
@@ -1435,7 +1435,7 @@ var AI = (function () {
       if (att.captor >= 0) {
         h.over = true;
         const c = Game.P[att.captor];
-        Game.sys('world', '【討伐成功】劫掠客 ' + att.name + ' 的主城被 ' + (c ? c.name : '義軍') + ' 攻陷！');
+        Game.sys('world', '【討伐成功】劫掠客 ' + att.name + ' 的主城被 ' + (c ? c.name : '義軍') + ' 攻陷！', att.id);
         if (c && c.ai) later(c, 'world', U.pick(CHAT.huntWin).replace('{n}', att.name), U.rint(1, 8));
         const r = raidMem(att);
         r.hits *= 0.5; r.sev = Math.max(0, r.sev - 0.2); // 吃了教訓，氣焰收斂一些

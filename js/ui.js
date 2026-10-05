@@ -13,6 +13,7 @@ var UI = (function () {
   let heroSel = 0, heroFilter = 'all';
   let repSel = 0;
   let teamPick = null; // {ti, slot}
+  let pickFilter = { fac: '', troop: '', star: 0, idle: false, sta: false, sort: 'star' }; // 部隊選將篩選
   let noticeSeen = 0;
   let selTeam = -1;
   let lastHud = 0;
@@ -625,6 +626,13 @@ var UI = (function () {
         teamPick = null; refreshPanel(); break;
       }
       case 'unslot': { const r = Game.setSlot(user, teamPick.ti, teamPick.slot, 0); if (!r.ok) toast(r.msg, 'warn'); teamPick = null; refreshPanel(); break; }
+      case 'pfilter': {
+        const k = d.k, v = d.v;
+        if (k === 'idle' || k === 'sta') pickFilter[k] = v === '1';
+        else if (k === 'star') pickFilter.star = +v;
+        else pickFilter[k] = v;
+        refreshPanel(); break;
+      }
       case 'cancelpick': teamPick = null; refreshPanel(); break;
       case 'teamhome': { const r = Game.send(user, +d.ti, user.cityTile, 'move'); toast(r.ok ? '部隊返回主城' : r.msg, r.ok ? 'info' : 'warn'); refreshPanel(); break; }
       case 'upgrade': { const r = Game.upgradeBuilding(user, d.key); toast(r.ok ? BUILDING_BY_KEY[d.key].name + ' 開始升級' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
@@ -703,7 +711,8 @@ var UI = (function () {
         if (!r.ok) { toast(r.msg, 'warn'); break; }
         drawResult = r.heroes;
         const best = Math.max(...r.heroes.map(h => Game.tpl(h).star));
-        if (best >= 5) toast('恭喜獲得五星武將！', 'good');
+        const n5 = r.heroes.filter(h => Game.tpl(h).star >= 5).length;
+        if (n5) toast(r.heroes.length > 1 ? '恭喜獲得 ' + n5 + ' 位五星武將！' : '恭喜獲得五星武將！', 'good');
         refreshPanel(); break;
       }
       case 'recharge': { const cu = d.kind === 'copper'; Game.recharge(user, +d.amt, d.kind); toast('儲值成功，獲得 ' + U.fmtFull(+d.amt) + (cu ? ' 銅幣' : ' 金銖') + '（模擬）', 'good'); refreshPanel(); break; }
@@ -877,8 +886,24 @@ var UI = (function () {
         const cur = Game.heroByUid(user, t.slots[teamPick.slot]);
         h += '<div class="sec-t">為第' + (teamPick.ti + 1) + '部隊・' + Battle.SLOT_NAME[teamPick.slot] + ' 選擇武將</div>';
         h += '<div><button class="btn small dark" data-act="cancelpick">取消</button> ' + (cur ? '<button class="btn small" data-act="unslot">下陣</button>' : '') + '</div>';
-        const cands = user.heroes.slice().sort((a, b) => Game.tpl(b).star - Game.tpl(a).star || b.lv - a.lv);
-        h += '<div class="picker">' + cands.map(x => heroCardHtml(x, { act: 'pickhero' })).join('') + '</div>';
+        const f = pickFilter;
+        const chip = (k, v, label, on) => '<button data-act="pfilter" data-k="' + k + '" data-v="' + v + '" class="' + (on ? 'on' : '') + '">' + label + '</button>';
+        h += '<div class="filter" style="margin-top:8px">' + chip('fac', '', '全部陣營', !f.fac) + ['漢', '魏', '蜀', '吳', '群'].map(x => chip('fac', x, x, f.fac === x)).join('') + '</div>';
+        h += '<div class="filter">' + chip('troop', '', '全部兵種', !f.troop) + ['騎', '步', '弓'].map(x => chip('troop', x, x + '兵', f.troop === x)).join('') + '<span style="width:8px"></span>' + [[0, '全部星級'], [5, '5★'], [4, '4★'], [3, '3★'], [2, '2★以下']].map(([v, l]) => chip('star', v, l, f.star === v)).join('') + '</div>';
+        h += '<div class="filter">' + chip('idle', f.idle ? '' : '1', '只看未上陣', f.idle) + chip('sta', f.sta ? '' : '1', '只看體力足夠', f.sta) + '<span style="width:8px"></span>' + [['star', '依星級'], ['lv', '依等級'], ['sta', '依體力'], ['cost', '依統御']].map(([v, l]) => chip('sort', v, l, f.sort === v)).join('') + '</div>';
+        let cands = user.heroes.filter(x => {
+          const tp = Game.tpl(x);
+          if (f.fac && tp.faction !== f.fac) return false;
+          if (f.troop && tp.troop !== f.troop) return false;
+          if (f.star === 2 ? tp.star > 2 : f.star && tp.star !== f.star) return false;
+          if (f.idle && x.team >= 0 && x.uid !== (cur && cur.uid)) return false;
+          if (f.sta && Game.getSta(x) < CFG.COST_ATTACK) return false;
+          return true;
+        });
+        const key = { star: x => Game.tpl(x).star * 1000 + x.lv, lv: x => x.lv, sta: x => Game.getSta(x), cost: x => Game.tpl(x).cost * 1000 + x.lv }[f.sort] || (x => x.lv);
+        cands.sort((a, b) => key(b) - key(a));
+        h += '<div class="muted" style="font-size:12px">符合 ' + cands.length + ' / ' + user.heroes.length + ' 名</div>';
+        h += '<div class="picker">' + (cands.map(x => heroCardHtml(x, { act: 'pickhero' })).join('') || '<div class="muted">沒有符合條件的武將</div>') + '</div>';
         return h;
       }
       user.teams.forEach((t, ti) => {
@@ -932,18 +957,22 @@ var UI = (function () {
 
     recruit() {
       let h = '<div class="packs">';
-      for (const pk of CFG.PACKS) {
-        h += '<div class="pack"><div class="pn">' + pk.name + '</div><div class="pr">' + pk.rates.map(([s, r]) => s + '★ ' + (r * 100).toFixed(1) + '%').join('　') + (pk.count ? '<br>五連抽保底四星' : '') + '</div>' + costHtml(pk.price) + '<br><button class="btn big ' + (pk.price.gold ? 'red' : '') + '" data-act="draw" data-pack="' + pk.key + '">招募' + (pk.count ? '五次' : '') + '</button></div>';
+      for (const pk of CFG.PACKS.filter(x => !x.hidden)) {
+        h += '<div class="pack' + (pk.elite ? ' elite' : '') + '"><div class="pn">' + pk.name + '</div><div class="pr">' + pk.rates.map(([s, r]) => s + '★ ' + (r * 100).toFixed(1) + '%').join('　') + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>' + costHtml(pk.price) + '<br><button class="btn big ' + (pk.price.gold ? 'red' : '') + '" data-act="draw" data-pack="' + pk.key + '">招募' + (pk.count ? pk.count + '次' : '') + '</button></div>';
       }
       h += '</div>';
-      if (drawResult) h += '<div class="sec-t">招募結果</div><div class="draw-result">' + drawResult.map((x, k) => heroCardHtml(x, { cls: 's' + Game.tpl(x).star, noTeam: true }).replace('class="hcard', 'style="animation-delay:' + (k * 0.12) + 's" class="hcard')).join('') + '</div>';
+      if (drawResult && drawResult.length > 5) {
+        const cnt = {}; for (const x of drawResult) { const st = Game.tpl(x).star; cnt[st] = (cnt[st] || 0) + 1; }
+        h += '<div class="sec-t">招募結果（共 ' + drawResult.length + ' 名）</div><div class="muted">' + [5, 4, 3, 2, 1].filter(st => cnt[st]).map(st => st + '★ ×' + cnt[st]).join('　') + '（依星級排序）</div>';
+      }
+      if (drawResult) h += '<div class="draw-result">' + drawResult.slice().sort((a, b) => Game.tpl(b).star - Game.tpl(a).star).map((x, k) => heroCardHtml(x, { cls: 's' + Game.tpl(x).star, noTeam: true }).replace('class="hcard', 'style="animation-delay:' + Math.min(k * 0.12, 1.2) + 's" class="hcard')).join('') + '</div>';
       h += '<div class="muted" style="margin-top:14px">金銖每日自動發放 ' + CFG.DAILY_GOLD + '，完成任務也可獲得。重複的武將可在「武將」頁面進階（+10 屬性點）或傳承戰法。</div>';
       return h;
     },
 
     recharge() {
       let h = '<div class="muted">本遊戲為單機模擬，「儲值」不需付費，僅為體驗課長玩法。</div><div class="packs" style="margin-top:12px">';
-      for (const [amt, lab] of [[680, '小月卡'], [3280, '中額禮包'], [6480, '648 大禮包']]) h += '<div class="pack"><div class="pn">' + lab + '</div><div class="pr">獲得 ' + amt + ' 金銖</div><button class="btn gold big" data-act="recharge" data-amt="' + amt + '">儲值</button></div>';
+      for (const [amt, lab] of [[680, '小月卡'], [3280, '中額禮包'], [6480, '648 大禮包'], [32800, '至尊大禮包']]) h += '<div class="pack"><div class="pn">' + lab + '</div><div class="pr">獲得 ' + amt + ' 金銖</div><button class="btn gold big" data-act="recharge" data-amt="' + amt + '">儲值</button></div>';
       h += '<div class="pack"><div class="pn">銅幣禮包</div><div class="pr">獲得 500,000 銅幣</div><button class="btn gold big" data-act="recharge" data-kind="copper" data-amt="500000">儲值</button></div>';
       return h + '</div><div style="margin-top:10px">目前金銖：' + U.fmtFull(user.gold) + '</div>';
     },

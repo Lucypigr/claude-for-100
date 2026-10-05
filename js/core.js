@@ -474,15 +474,22 @@ var Game = (function () {
     if (!canAfford(p, pack.price)) return err(pack.price.gold ? '金銖不足' : '銅幣不足');
     pay(p, pack.price);
     const n = pack.count || 1;
-    const got = [];
+    const stars = [];
     for (let k = 0; k < n; k++) {
       let r = U.rnd(), star = 1;
       for (const [s, pr] of pack.rates) { if (r < pr) { star = s; break; } r -= pr; }
-      if (n === 5 && k === 4 && got.every(h => tpl(h).star < 4) && star < 4) star = 4; // 五連保底四星
-      const pool = HEROES.filter(h => h.star === star);
-      const h = addHero(p, U.pick(pool).id);
-      got.push(h);
+      stars.push(star);
     }
+    if (pack.key === 'gold5' && stars.every(s => s < 4)) stars[4] = 4; // 五連保底四星
+    if (pack.pity5) {
+      // 保底：至少 pity5 位五星，不足時把最低星級的抽卡升為五星
+      let have = stars.filter(s => s === 5).length;
+      if (have < pack.pity5) {
+        const idx = stars.map((s, i) => i).filter(i => stars[i] < 5).sort((a, b) => stars[a] - stars[b] || U.rnd() - 0.5);
+        for (let k = 0; k < pack.pity5 - have && k < idx.length; k++) stars[idx[k]] = 5;
+      }
+    }
+    const got = stars.map(star => addHero(p, U.pick(HEROES.filter(h => h.star === star)).id));
     p.stats.draws += n;
     return ok({ heroes: got });
   }

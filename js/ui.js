@@ -164,7 +164,10 @@ var UI = (function () {
     $('#clock-phase').textContent = '賽季 ' + (Game.day() + 1) + '/' + CFG.SEASON_DAYS + ' 天・' + ph.name;
     document.querySelectorAll('#speed button').forEach(b => b.classList.toggle('on', G.paused ? +b.dataset.v === 0 : +b.dataset.v === G.speed));
     const gx = U.clamp(Math.floor(Render.cam.cx), 0, World.N - 1), gy = U.clamp(Math.floor(Render.cam.cy), 0, World.N - 1);
-    $('#coord').textContent = '(' + gx + ',' + gy + ') ' + World.states[Game.T.state[World.idx(gx, gy)]].name + (user.captor >= 0 ? '　⚠ 淪陷中' : G.time < user.protectEnd ? '　主城保護中' : '');
+    const wxs = Game.T.state[World.idx(gx, gy)], wx = Weather.at(World.states[wxs].name, G.time);
+    const coordEl = $('#coord');
+    coordEl.title = Weather.season(G.time) + '季・' + World.states[wxs].name + '：' + wx.name + '\n' + wx.desc;
+    coordEl.textContent = '(' + gx + ',' + gy + ') ' + World.states[Game.T.state[World.idx(gx, gy)]].name + '　' + wx.icon + wx.name + (user.captor >= 0 ? '　⚠ 淪陷中' : G.time < user.protectEnd ? '　主城保護中' : '');
   }
   const MARCH_NAME = { attack: '出征', return: '回城', move: '調動', garrison: '駐守', farm: '屯田', train: '練兵', sweep: '掃蕩' };
   function statusText(p, t) {
@@ -409,7 +412,9 @@ var UI = (function () {
     if (!city) {
       const L = T.lvl[i];
       h += row('產量', CFG.RES_NAME[CFG.RES[T.res[i]]] + ' +' + CFG.LAND_OUTPUT[L] + '/時');
-      const g = CFG.GARRISON[L];
+      const camp = G.yellow && G.yellow.camps[i];
+      if (camp) h += row('黃巾軍營寨', '<span class="bad">守軍強度 Lv' + Game.effLvl(i) + '</span>，擊破可得榮譽點 <b class="good">+' + Game.honorOf(camp.lvl) + '</b>，剩 ' + U.fmtDur(camp.until - G.time));
+      const g = CFG.GARRISON[Game.effLvl(i)];
       const st = G.landSiege[i];
       h += row('守軍', g[0] + '隊 × ' + g[1] + '將 Lv' + g[2] + '，每將 ' + g[3] + ' 兵' + (st ? ' <span class="warn">(交戰中)</span>' : ''));
       if (!user.firstCap[i]) h += row('首佔名望', '+' + L * CFG.FAME_PER_LVL);
@@ -599,6 +604,14 @@ var UI = (function () {
       case 'recall': { const r = Game.recall(user, +d.ti); toast(r.ok ? '部隊撤回中' : r.msg, r.ok ? 'info' : 'warn'); refreshPanel(); break; }
       case 'recruit': { const r = Game.recruit(user, +d.ti, 1); toast(r.ok ? '開始征兵，需時 ' + U.fmtDur(r.time) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'recruitall': { let n = 0; user.teams.forEach((t, ti) => { if (Game.recruit(user, ti, 1).ok) n++; }); toast(n ? n + ' 支部隊開始征兵' : '沒有可征兵的部隊（需在主城待命且資源足夠）', n ? 'good' : 'warn'); refreshPanel(); break; }
+      case 'honortab': panelTab = d.star; refreshPanel(); break;
+      case 'honorexch': {
+        const t = HEROES[+d.id];
+        if (!t || !ask('消耗榮譽點 ' + Game.HONOR_PRICE[t.star] + ' 兌換 ' + t.star + '★【' + t.name + '】？')) break;
+        const r = Game.exchangeHonor(user, +d.id);
+        toast(r.ok ? '兌換成功：' + t.name : r.msg, r.ok ? 'good' : 'warn');
+        refreshPanel(); break;
+      }
       case 'savepreset': { const r = Game.savePreset(user, +d.ti); toast(r.ok ? (r.replaced ? '已更新配置「' + user.presets[r.idx].name + '」' : '已儲存為「' + user.presets[r.idx].name + '」') : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'delpreset': { const r = Game.deletePreset(user, +d.k); if (!r.ok) toast(r.msg, 'warn'); refreshPanel(); break; }
       case 'applypreset': { const r = Game.applyPreset(user, +d.ti, +d.k); toast(r.ok ? '第' + '一二三四五'[+d.ti] + '隊已換成「' + r.name + '」' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); hudTeams(); break; }
@@ -723,7 +736,7 @@ var UI = (function () {
   }
 
   // ================= 面板 =================
-  const PANEL_TITLE = { city: '主城內政', heroes: '武將', teams: '部隊', recruit: '招募', skills: '戰法', reports: '戰報', alliance: '同盟', world: '天下大勢', rank: '排行榜', wanted: '通緝', season: '賽季', quests: '任務', settings: '設定', help: '新手指南', recharge: '儲值', settle: '賽季結算' };
+  const PANEL_TITLE = { city: '主城內政', heroes: '武將', teams: '部隊', recruit: '招募', skills: '戰法', reports: '戰報', alliance: '同盟', world: '天下大勢', rank: '排行榜', wanted: '通緝', honor: '榮譽', season: '賽季', quests: '任務', settings: '設定', help: '新手指南', recharge: '儲值', settle: '賽季結算' };
   function openPanel(name, arg) {
     panel = name; panelArg = arg || null; panelTab = null; teamPick = null; drawResult = null;
     if (name === 'heroes' && !heroSel && user.heroes.length) heroSel = user.heroes[0].uid;
@@ -1034,10 +1047,40 @@ var UI = (function () {
     world() {
       let h = '<div class="legend"><span><i style="background:#3cbe50"></i>我方</span>';
       for (const a of G.alliances.filter(x => !x.dead).sort((x, y) => y.power - x.power).slice(0, 12)) h += '<span><i style="background:' + a.color + '"></i>〔' + E(a.name) + '〕' + a.cities.length + '城</span>';
-      h += '</div><canvas id="bigworld" class="big-world" style="height:calc(100% - 40px)"></canvas>';
+      h += '</div><div class="legend" title="每 6 小時換一次天氣；點州名旁的天氣看影響">' + '<span><b>' + Weather.season(G.time) + '季天氣</b></span>' + World.states.map(st => { const w = Weather.at(st.name, G.time); return '<span title="' + E(w.desc) + '">' + st.name + ' ' + w.icon + w.name + '</span>'; }).join('') + '</div>';
+      h += '<canvas id="bigworld" class="big-world" style="height:calc(100% - 70px)"></canvas>';
       const prev = Render.mode;
       if (prev !== 'alliance') { Render.setMode('alliance'); setTimeout(() => Render.setMode(prev), 50); }
       return h;
+    },
+
+    honor() {
+      const star = +(panelTab || 4);
+      const y = G.yellow ? Object.keys(G.yellow.camps).map(k => ({ tile: +k, c: G.yellow.camps[k] })) : [];
+      const ux = World.X(user.cityTile), uy = World.Y(user.cityTile);
+      y.sort((a, b) => Math.hypot(World.X(a.tile) - ux, World.Y(a.tile) - uy) - Math.hypot(World.X(b.tile) - ux, World.Y(b.tile) - uy));
+      let h = '<div class="stats-grid" style="grid-template-columns:1fr 1fr"><div><span>榮譽點</span><span class="good"><b>' + U.fmtFull(Math.floor(user.honor || 0)) + '</b></span></div><div><span>擊破黃巾軍營寨</span><span>' + (user.stats.yellow || 0) + ' 處</span></div></div>';
+      h += '<div class="muted" style="font-size:12px;margin-top:6px">黃巾賊會定期在玩家領地旁的無主地設下營寨（守軍比土地等級高 2 級），限時 ' + (Game.YELLOW.LIFE / 60) + ' 小時。擊破後佔領該地並獲得榮譽點，榮譽點可兌換武將。</div>';
+      h += '<div class="sec-t">黃巾軍營寨（共 ' + y.length + ' 處，依離你主城的遠近排序）</div>';
+      if (!y.length) h += '<div class="muted">目前沒有黃巾軍營寨，下一批約在 ' + U.fmtDur(Math.max(0, (G.yellow ? G.yellow.next : 0) - G.time)) + ' 後出現。</div>';
+      else {
+        h += '<div class="hist-list" style="max-height:200px;overflow-y:auto"><table class="tbl"><tr><th>位置</th><th>州</th><th>守軍</th><th>榮譽</th><th>剩餘</th><th></th></tr>';
+        for (const e of y.slice(0, 30)) {
+          const adj = Game.adjFriendly(user, e.tile);
+          h += '<tr><td>(' + World.X(e.tile) + ',' + World.Y(e.tile) + ')</td><td>' + World.states[Game.T.state[e.tile]].name + '</td><td>Lv' + Game.effLvl(e.tile) + '</td><td class="good">+' + Game.honorOf(e.c.lvl) + '</td><td>' + U.fmtDur(e.c.until - G.time) + '</td><td><button class="btn small ' + (adj ? 'red' : 'dark') + '" data-act="gototile" data-tile="' + e.tile + '" title="' + (adj ? '與你的領地相鄰，可直接出征' : '離你的領地還有距離') + '">前往' + (adj ? '（可攻）' : '') + '</button></td></tr>';
+        }
+        h += '</table></div>';
+      }
+      h += '<div class="sec-t">榮譽兌換</div><div class="filter">' + [2, 3, 4, 5].map(st => '<button data-act="honortab" data-star="' + st + '" class="' + (star === st ? 'on' : '') + '">' + st + '★　' + Game.HONOR_PRICE[st] + ' 點</button>').join('') + '</div>';
+      if (star === 5) h += '<div class="warn" style="font-size:12px;margin-bottom:4px">五星武將需要累積 ' + Game.HONOR_PRICE[5] + ' 榮譽點，要打很多場黃巾軍才夠。</div>';
+      const list = HEROES.filter(t => t.star === star).sort((a, b) => ['漢', '魏', '蜀', '吳', '群'].indexOf(a.faction) - ['漢', '魏', '蜀', '吳', '群'].indexOf(b.faction) || a.id - b.id);
+      const price = Game.HONOR_PRICE[star], can = (user.honor || 0) >= price;
+      h += '<div class="hist-list" style="max-height:300px;overflow-y:auto"><table class="tbl"><tr><th>武將</th><th>陣營</th><th>兵種</th><th>統御</th><th>已有</th><th></th></tr>';
+      for (const t of list) {
+        const own = user.heroes.filter(x => x.t === t.id).length;
+        h += '<tr><td><b style="color:' + FACTION_COLOR[t.faction] + '">' + E(t.name) + '</b></td><td>' + t.faction + '</td><td>' + t.troop + '</td><td>' + t.cost + '</td><td>' + (own || '') + '</td><td><button class="btn small ' + (can ? 'gold' : 'dark') + '" data-act="honorexch" data-id="' + t.id + '"' + (can ? '' : ' disabled') + '>兌換 ' + price + '</button></td></tr>';
+      }
+      return h + '</table></div>';
     },
 
     wanted() {

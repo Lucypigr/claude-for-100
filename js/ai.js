@@ -284,6 +284,16 @@ var AI = (function () {
         else if (Game.tpl(f).star >= 3 && !p.lib.includes(Game.tpl(f).inherit) && U.rnd() < pr.skill) Game.inheritHero(p, f.uid);
       }
     }
+    // 榮譽點兌換武將：負擔得起就換最高星級（技術高的更常兌換、更偏好高星）
+    if ((p.honor || 0) >= 450 && U.rnd() < 0.3 + pr.skill * 0.5) {
+      for (const st of [5, 4, 3]) {
+        if (p.honor < Game.HONOR_PRICE[st] || (st === 3 && pr.skill < 0.4)) continue;
+        const pool = HEROES.filter(t => t.star === st && !p.heroes.some(h => h.t === t.id));
+        if (!pool.length) continue;
+        Game.exchangeHonor(p, U.pick(pool).id);
+        break;
+      }
+    }
     // 事件戰法：集齊武將就兌換
     if (U.rnd() < 0.2 + pr.skill) for (const ev of EVENT_SKILLS) { const st = Game.eventStatus(p, ev); if (!st.done && !st.missing.length) Game.exchangeEvent(p, ev.id); }
     // 覺醒：主力部隊的四星以上武將
@@ -743,14 +753,15 @@ var AI = (function () {
     const reckless = U.rnd() < (1 - pr.skill) * 0.3;
     for (const i of cands) {
       if (T.owner[i] >= 0) continue; // 他人土地交給 PvP 邏輯
-      const L = T.lvl[i];
+      const L = Game.effLvl(i); // 黃巾軍營寨的守軍較強
       const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L]);
       const pr2 = winP(perceived(p, ratio));
       const need = reckless ? 0.25 : 0.45 + pr.skill * 0.3;
       if (pr2 < need) continue;
       if (atCap && L <= minOwned + 1 && pr.skill > 0.4) continue;
       const d = World.dist(i, team.base);
-      let v = CFG.LAND_OUTPUT[L] * w[CFG.RES[T.res[i]]] * (0.5 + pr2) + (p.firstCap[i] ? 0 : L * 25) - d * 6;
+      let v = CFG.LAND_OUTPUT[T.lvl[i]] * w[CFG.RES[T.res[i]]] * (0.5 + pr2) + (p.firstCap[i] ? 0 : T.lvl[i] * 25) - d * 6;
+      if (Game.G.yellow && Game.G.yellow.camps[i]) v += 140 + pr.skill * 120; // 黃巾軍營寨：榮譽點可兌換武將，高手更愛打
       // 升級期偏好經驗高的地
       v += CFG.GARRISON[L][0] * CFG.GARRISON[L][1] * CFG.GARRISON[L][3] * 0.02;
       if (reckless) v += U.rnd() * 400;

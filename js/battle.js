@@ -10,6 +10,7 @@ var Battle = (function () {
   const SLOT_NAME = ['大營', '中軍', '前鋒'];
 
   let rnd = Math.random;
+  let curWx = null; // 本場戰鬥的天氣（Weather.TYPES 的一項），見 simulate 的 opts.wx
 
   // 依戰法等級縮放效果數值（傷害率、治療率、增減益、狀態強度），快取每個 (戰法, 等級)
   const SCALED_V = { burn: 1, fear: 1, regen: 1, counter: 1, dmgDealt: 1, dmgTaken: 1, evade: 1, double: 1 };
@@ -131,6 +132,8 @@ var Battle = (function () {
     else if (TROOP_COUNTER[tgt.troop] === src.troop) dmg *= 0.87;
     dmg *= Math.max(0.3, 1 + stSum(src, 'dmgDealt')) * Math.max(0.3, 1 + stSum(tgt, 'dmgTaken'));
     dmg *= src.mf; // 士氣
+    const wx = curWx;
+    if (wx) { if (src.troop === '弓') dmg *= wx.bow; else if (src.troop === '騎') dmg *= wx.cav; if (src.range >= 3) dmg *= wx.far; }
     dmg *= 0.92 + rnd() * 0.16;
     return dmg;
   }
@@ -236,7 +239,7 @@ var Battle = (function () {
     // 持續效果
     for (const s of u.sts) {
       if ((s.st === 'burn' || s.st === 'fear') && s.dmg > 0 && alive(u)) {
-        const d = Math.max(1, Math.min(u.troops, Math.round(s.dmg * (0.9 + rnd() * 0.2))));
+        const d = Math.max(1, Math.min(u.troops, Math.round(s.dmg * (0.9 + rnd() * 0.2) * (curWx ? curWx.fire : 1))));
         u.troops -= d; u.wounded += d;
         ctx.L(nm(u) + ' 受到' + ST_NAME[s.st] + '傷害 ' + d + '（剩餘 ' + u.troops + '）', 'dot', { k: 'dmg', d: UK(u), v: d, n: u.troops, s: ST_NAME[s.st], dot: 1 });
         if (!alive(u)) { ctx.L(nm(u) + ' 兵力耗盡，無法再戰', 'dead', { k: 'dead', d: UK(u) }); ctx.updatePos(); if (ctx.checkEnd()) return; return; }
@@ -301,6 +304,7 @@ var Battle = (function () {
   function simulate(atk, def, opts) {
     opts = opts || {};
     rnd = opts.rng || Math.random;
+    curWx = opts.wx || null;
     const A = atk.filter(u => u && u.troops > 0).map(u => prepUnit(u, 0));
     const D = def.filter(u => u && u.troops > 0).map(u => prepUnit(u, 1));
     // 若大營缺席（兵力 0），以剩餘最高槽位者為大營
@@ -312,6 +316,7 @@ var Battle = (function () {
       return { winner: !A.length ? 'def' : 'atk', rounds: 0, A, D, log: ctx.log || [] };
     }
     ctx.updatePos();
+    if (curWx && curWx.name !== '晴' && curWx.name !== '陰') ctx.L('天氣：' + curWx.name + '（' + curWx.desc + '）', 'ctl');
     // 準備回合：指揮、被動
     ctx.round = 0;
     ctx.L('—— 準備回合 ——', 'round', { k: 'round', r: 0 });

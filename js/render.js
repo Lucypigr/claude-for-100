@@ -467,10 +467,30 @@ var Render = (function () {
         }
       }
     }
+    // 通緝中的劫掠客標記畫在最上層，任何縮放都看得到
+    for (const q of Game.P) {
+      if (q.title !== '劫掠客') continue;
+      const [wx, wy] = toScreen(World.X(q.cityTile) + 0.5, World.Y(q.cityTile) + 0.5);
+      if (onScreen(wx, wy, 60)) drawWanted(wx, wy, hw, hh, tw);
+    }
   }
   function roundRect(c, x, y, w, h, r) {
     c.beginPath(); c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r); c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
     c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r); c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath();
+  }
+  // 通緝中的劫掠客：主城上方紅色脈動圓圈與骷髏，任何縮放都看得到
+  function drawWanted(sx, sy, hw, hh, tw) {
+    const now = performance.now();
+    const pulse = 1 + Math.sin(now / 250) * 0.12;
+    const rr = Math.max(7, Math.min(16, tw * 0.5)) * pulse;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(sx, sy - hh * 1.6, rr + 4, 0, 6.283);
+    ctx.fillStyle = 'rgba(210,30,30,0.25)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#ff3b30'; ctx.stroke();
+    ctx.font = 'bold ' + Math.round(rr * 1.2) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff'; ctx.fillText('☠', sx, sy - hh * 1.6);
+    if (tw >= 14) { ctx.font = 'bold 11px "Noto Serif TC", serif'; ctx.fillStyle = '#ff6a5a'; ctx.fillText('通緝', sx, sy - hh * 1.6 - rr - 10); }
+    ctx.restore();
   }
   function drawCitySprite(c, sx, sy, hw, hh, tw) {
     const s = c.size;
@@ -704,6 +724,12 @@ var Render = (function () {
     const ux = World.X(u.cityTile) + 0.5, uy = World.Y(u.cityTile) + 0.5;
     c.fillStyle = '#6dff7a';
     c.beginPath(); c.arc(ox + (ux - uy) * hw, oy + (ux + uy) * hh, 3, 0, 6.283); c.fill();
+    for (const q of Game.P) {
+      if (q.title !== '劫掠客') continue;
+      const qx = World.X(q.cityTile) + 0.5, qy = World.Y(q.cityTile) + 0.5;
+      c.fillStyle = '#ff3b30'; c.strokeStyle = '#fff'; c.lineWidth = 1;
+      c.beginPath(); c.arc(ox + (qx - qy) * hw, oy + (qx + qy) * hh, 3.5, 0, 6.283); c.fill(); c.stroke();
+    }
     miniCv._map = { ox, oy, hw, hh };
   }
   function miniToGrid(mx, my) {
@@ -749,6 +775,14 @@ var Render = (function () {
     const ux = World.X(u.cityTile) + 0.5, uy = World.Y(u.cityTile) + 0.5;
     c.fillStyle = '#6dff7a';
     c.beginPath(); c.arc(ox + (ux - uy) * hw, oy + (ux + uy) * hh, 4, 0, 6.283); c.fill();
+    for (const q of Game.P) {
+      if (q.title !== '劫掠客') continue;
+      const qx = World.X(q.cityTile) + 0.5, qy = World.Y(q.cityTile) + 0.5;
+      const px = ox + (qx - qy) * hw, py = oy + (qx + qy) * hh;
+      c.fillStyle = '#ff3b30'; c.strokeStyle = '#fff'; c.lineWidth = 1.2;
+      c.beginPath(); c.arc(px, py, 5, 0, 6.283); c.fill(); c.stroke();
+      c.font = '11px "Noto Serif TC", serif'; c.fillStyle = '#ff9a8a'; c.fillText('☠' + q.name, px, py - 9);
+    }
     canvas._map = { ox, oy, hw, hh };
   }
 

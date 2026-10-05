@@ -32,3 +32,27 @@ for (const h of S.HEROES) {
   if (!r.ok || u.skp !== skp0 + r.pts || u.heroes.length !== 6) throw new Error('bulk convert');
   console.log('recommend + bulk convert OK');
 }
+
+// 隊伍配置：儲存 → 換隊（體力不足時換上另一組）
+{
+  const G2 = S.Game.newGame({ seed: 4242, userName: '配置測試' });
+  const u = G2.players[G2.userId];
+  const add = n => S.Game.addHero(u, S.HERO_BY_NAME[n].id);
+  u.heroes.length = 0; u.teams.forEach(t => { t.slots = [0, 0, 0]; });
+  const a = ['趙雲', '黃月英', '甄姬'].map(add), b = ['關羽', '荀彧', '華佗'].map(add);
+  u.b.command = Math.max(u.b.command || 1, 10);
+  a.forEach((h, s) => S.Game.setSlot(u, 0, s, h.uid));
+  const r1 = S.Game.savePreset(u, 0, 'A組');
+  if (!r1.ok) throw new Error('save preset A: ' + r1.msg);
+  // 用 B 組換入並存起來
+  const rb = S.Game.applyPreset(u, 0, 0); if (!rb.ok) throw new Error('apply: ' + rb.msg);
+  u.teams[0].slots.forEach(uid => { const h = S.Game.heroByUid(u, uid); if (h) h.team = -1; }); u.teams[0].slots = [0, 0, 0];
+  b.forEach((h, s) => { const r = S.Game.setSlot(u, 0, s, h.uid); if (!r.ok) throw new Error('slot B: ' + r.msg); });
+  if (!S.Game.savePreset(u, 0, 'B組').ok) throw new Error('save preset B');
+  // 讓目前 B 組體力見底，A 組滿體力 → 換隊應換回 A
+  b.forEach(h => { h.sta = 0; h.staT = S.Game.G.time; });
+  const sw = S.Game.swapTired(u, 0);
+  if (!sw.ok || sw.name !== 'A組') throw new Error('swapTired ' + JSON.stringify(sw));
+  if (u.teams[0].slots.join() !== a.map(h => h.uid).join()) throw new Error('slots after swap');
+  console.log('team presets + swapTired OK; wantedList', S.Game.wantedList().length);
+}

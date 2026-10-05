@@ -35,6 +35,9 @@ var UI = (function () {
     try { auto = sessionStorage.getItem('stzb_autocontinue') === '1'; sessionStorage.removeItem('stzb_autocontinue'); } catch (e) { /* */ }
     if (auto && Game.hasSave()) setTimeout(continueGame, 0);
     document.addEventListener('click', onClick);
+    const tp = $('#teampanel');
+    tp.addEventListener('pointerdown', () => { teamPanelDown = true; });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) tp.addEventListener(ev, () => { teamPanelDown = false; });
     $('#chatform').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
     // 中文輸入法選字時按 Enter 不應送出訊息
     $('#chatin').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) e.preventDefault(); });
@@ -114,8 +117,17 @@ var UI = (function () {
     const sp = [0, 1, 2, 5, 10, 20];
     $('#speed').innerHTML = sp.map(v => '<button data-act="speed" data-v="' + v + '">' + (v === 0 ? '暫停' : v + '×') + '</button>').join('');
   }
+  let lastAuto = 0, lastTeamHtml = '', teamPanelDown = false;
+  // 自動增兵：待命在主城、兵力沒滿的部隊自動征兵（資源或預備兵不足時 recruit 會失敗，直接略過）
+  function autoRecruitTick(force) {
+    if (!user.autoRecruit) return;
+    let n = 0;
+    user.teams.forEach((t, ti) => { if (t.status === 'idle' && !t.rq && Game.isHome(user, t.base) && Game.recruit(user, ti, 1).ok) n++; });
+    if (n && !force) toast('自動增兵：' + n + ' 支部隊開始征兵', 'info');
+  }
   function update(now) {
     if (!G) return;
+    if (user.autoRecruit && now - lastAuto > 3000) { lastAuto = now; autoRecruitTick(); }
     if (now - lastHud > 200) { lastHud = now; hudTop(); hudTeams(); hudAlert(); hudQuest(); hudBadges(); }
     hudChat();
     hudToasts();
@@ -173,13 +185,14 @@ var UI = (function () {
     return '<div class="bar wb"' + (style ? ' style="' + style + '"' : '') + '><i style="width:' + (cap ? troops / cap * 100 : 0) + '%"></i>' + (wnd > 0 ? '<i class="w" style="width:' + (wnd / cap * 100) + '%"></i>' : '') + '</div>';
   }
   function hudTeams() {
-    let h = '';
+    let h = '<div class="tbar" style="display:flex;gap:4px"><button class="btn small ' + (user.autoRecruit ? 'green' : 'dark') + '" data-act="autorecruit" style="flex:1" title="開啟後，待命在主城的部隊會自動補滿兵力（資源或預備兵不足時略過）">自動增兵：' + (user.autoRecruit ? '開' : '關') + '</button><button class="btn small dark" data-act="open" data-panel="teams" title="部隊編成與配置">編成</button></div>';
     user.teams.forEach((t, ti) => {
       const hs = Game.teamHeroes(user, t);
       const troops = Game.teamTroops(user, t), cap = Game.teamCapTroops(user, t);
       const [cls, st] = statusText(user, t);
       h += '<div class="tcard' + (selTeam === ti ? ' sel' : '') + '" data-act="teamcard" data-ti="' + ti + '">';
-      h += '<div class="th"><span class="tn">第' + '一二三四五'[ti] + '部隊</span><span class="ts ' + cls + '">' + st + '</span></div>';
+      const tired = t.status === 'idle' && !t.rq && t.base === user.cityTile && user.presets && user.presets.length && Game.teamMinSta(user, t) < CFG.COST_ATTACK;
+      h += '<div class="th"><span class="tn">第' + '一二三四五'[ti] + '部隊</span>' + (tired ? '<button class="btn small gold" data-act="swaptired" data-ti="' + ti + '" title="體力不足，一鍵換上另一組配置">⇄ 換隊</button>' : '') + '<span class="ts ' + cls + '">' + st + '</span></div>';
       h += '<div class="heroes">' + [2, 1, 0].map(s => {
         const x = hs[s];
         if (!x) return '<div class="mini-hero empty">' + Battle.SLOT_NAME[s] + '</div>';
@@ -191,6 +204,9 @@ var UI = (function () {
       h += '<div class="tinfo"><span>兵 ' + U.fmt(troops) + '/' + U.fmt(cap) + (wnd > 0 ? ' <span class="wtxt">傷' + U.fmt(wnd) + '</span>' : '') + '</span><span>體力 ' + Math.floor(Game.teamMinSta(user, t)) + '</span></div>';
       h += '</div>';
     });
+    // 內容沒變就不重建，且按住滑鼠/手指時不重建，避免點擊落在被替換掉的按鈕上
+    if (h === lastTeamHtml || teamPanelDown) return;
+    lastTeamHtml = h;
     $('#teampanel').innerHTML = h;
   }
   function hudAlert() {
@@ -217,6 +233,8 @@ var UI = (function () {
     const b = $('#rep-badge'); b.textContent = unread; b.classList.toggle('hidden', !unread);
     const qn = QUESTS.filter(q => !user.quests[q.id] && q.check(user)).length;
     const qb = $('#quest-badge'); qb.textContent = qn; qb.classList.toggle('hidden', !qn);
+    const wb = $('#wanted-badge');
+    if (wb) { const wn = Game.wantedList().length; wb.textContent = wn; wb.classList.toggle('hidden', !wn); }
     const ab = $('#alli-badge');
     const inv = user.alliance < 0 && G.invites && G.invites.length;
     ab.textContent = inv ? '!' : ''; ab.classList.toggle('hidden', !inv);
@@ -235,7 +253,7 @@ var UI = (function () {
     const arr = chatArr(chatTab).slice(-80);
     log.innerHTML = arr.map(m => {
       const tm = '<span class="tm">' + String(Math.floor(m.t % 1440 / 60)).padStart(2, '0') + ':' + String(Math.floor(m.t % 60)).padStart(2, '0') + '</span>';
-      if (m.sys) return '<div class="m sys">' + tm + E(m.text) + '</div>';
+      if (m.sys) return '<div class="m sys">' + tm + E(m.text) + (m.pid !== undefined && Game.P[m.pid] ? ' <span class="link" data-act="gotoplayer" data-pid="' + m.pid + '">[前往]</span>' : '') + '</div>';
       return '<div class="m' + (m.from === user.id ? ' me' : '') + '">' + tm + (m.tag && chatTab === 'world' ? '<span class="tg">〔' + E(m.tag) + '〕</span>' : '') + '<span class="n" data-act="gotoplayer" data-pid="' + m.from + '">' + E(m.name) + '</span>：' + E(m.text) + '</div>';
     }).join('') || '<div class="muted">' + (chatTab === 'ally' ? '尚未加入同盟' : '暫無訊息') + '</div>';
     if (atBottom || chatTabSeen !== chatTab) log.scrollTop = log.scrollHeight;
@@ -581,6 +599,11 @@ var UI = (function () {
       case 'recall': { const r = Game.recall(user, +d.ti); toast(r.ok ? '部隊撤回中' : r.msg, r.ok ? 'info' : 'warn'); refreshPanel(); break; }
       case 'recruit': { const r = Game.recruit(user, +d.ti, 1); toast(r.ok ? '開始征兵，需時 ' + U.fmtDur(r.time) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'recruitall': { let n = 0; user.teams.forEach((t, ti) => { if (Game.recruit(user, ti, 1).ok) n++; }); toast(n ? n + ' 支部隊開始征兵' : '沒有可征兵的部隊（需在主城待命且資源足夠）', n ? 'good' : 'warn'); refreshPanel(); break; }
+      case 'savepreset': { const r = Game.savePreset(user, +d.ti); toast(r.ok ? (r.replaced ? '已更新配置「' + user.presets[r.idx].name + '」' : '已儲存為「' + user.presets[r.idx].name + '」') : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
+      case 'delpreset': { const r = Game.deletePreset(user, +d.k); if (!r.ok) toast(r.msg, 'warn'); refreshPanel(); break; }
+      case 'applypreset': { const r = Game.applyPreset(user, +d.ti, +d.k); toast(r.ok ? '第' + '一二三四五'[+d.ti] + '隊已換成「' + r.name + '」' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); hudTeams(); break; }
+      case 'swaptired': { const r = Game.swapTired(user, +d.ti); toast(r.ok ? '第' + '一二三四五'[+d.ti] + '隊已換成「' + r.name + '」' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); hudTeams(); break; }
+      case 'autorecruit': { user.autoRecruit = !user.autoRecruit; toast(user.autoRecruit ? '自動增兵已開啟：待命在主城的部隊會自動補滿兵力' : '自動增兵已關閉', 'info'); autoRecruitTick(true); hudTeams(); break; }
       case 'autoteam': { const t = user.teams[+d.ti]; for (let s = 0; s < 3; s++) Game.setSlot(user, +d.ti, s, 0); Game.autoFillTeam(user, +d.ti); refreshPanel(); break; }
       case 'slot': teamPick = { ti: +d.ti, slot: +d.slot }; refreshPanel(); break;
       case 'pickhero': {
@@ -700,7 +723,7 @@ var UI = (function () {
   }
 
   // ================= 面板 =================
-  const PANEL_TITLE = { city: '主城內政', heroes: '武將', teams: '部隊', recruit: '招募', skills: '戰法', reports: '戰報', alliance: '同盟', world: '天下大勢', rank: '排行榜', season: '賽季', quests: '任務', settings: '設定', help: '新手指南', recharge: '儲值', settle: '賽季結算' };
+  const PANEL_TITLE = { city: '主城內政', heroes: '武將', teams: '部隊', recruit: '招募', skills: '戰法', reports: '戰報', alliance: '同盟', world: '天下大勢', rank: '排行榜', wanted: '通緝', season: '賽季', quests: '任務', settings: '設定', help: '新手指南', recharge: '儲值', settle: '賽季結算' };
   function openPanel(name, arg) {
     panel = name; panelArg = arg || null; panelTab = null; teamPick = null; drawResult = null;
     if (name === 'heroes' && !heroSel && user.heroes.length) heroSel = user.heroes[0].uid;
@@ -852,6 +875,8 @@ var UI = (function () {
         h += '<span>';
         if (t.status === 'march' || t.status === 'garrison' || t.status === 'train') h += '<button class="btn small dark" data-act="recall" data-ti="' + ti + '">撤回</button> ';
         if (t.status === 'idle' && t.base !== user.cityTile) h += '<button class="btn small dark" data-act="teamhome" data-ti="' + ti + '">回主城</button> ';
+        h += '<button class="btn small" data-act="savepreset" data-ti="' + ti + '" title="把這支部隊目前的三位武將存成一組配置">儲存配置</button> ';
+        h += '<button class="btn small gold" data-act="swaptired" data-ti="' + ti + '" title="換上另一組體力足夠、兵力最多的配置">一鍵換隊</button> ';
         h += '<button class="btn small" data-act="autoteam" data-ti="' + ti + '">自動配將</button></span></div>';
         h += '<div style="display:flex;gap:14px;flex-wrap:wrap"><div class="slots">';
         for (const s of [0, 1, 2]) {
@@ -887,6 +912,7 @@ var UI = (function () {
         } else h += '<div class="good" style="margin-top:8px">' + (wnd > 0 ? '其餘兵力已滿' : '兵力已滿') + '</div>';
         h += '</div></div></div>';
       });
+      h += presetsHtml();
       h += '<div class="muted">提示：戰鬥損失的兵力約一半會成為<span class="wtxt">傷兵</span>，部隊回主城待命時自動治療，比征兵便宜且不耗預備兵。出征距離越遠士氣越低（6 格外每格 -1.5，最低 40），傷害隨之下降；善用要塞與同盟城池作為前線駐地。<br>大營陣亡即戰敗。前鋒放防禦高的近戰武將，大營放攻擊距離遠的核心武將。三人同陣營或同兵種有額外加成。騎克步、步克弓、弓克騎。</div>';
       return h;
     },
@@ -1012,6 +1038,21 @@ var UI = (function () {
       const prev = Render.mode;
       if (prev !== 'alliance') { Render.setMode('alliance'); setTimeout(() => Render.setMode(prev), 50); }
       return h;
+    },
+
+    wanted() {
+      const list = Game.wantedList().sort((a, b) => ((b.aiMem && b.aiMem.raid && b.aiMem.raid.sev) || 0) - ((a.aiMem && a.aiMem.raid && a.aiMem.raid.sev) || 0));
+      let h = '<div class="muted">被指認為<b>劫掠客</b>的主公：專門欺負新手與弱小玩家。地圖上以紅色骷髏標示其主城，點「前往」直接飛過去。嚴重程度越高，越容易引來全服討伐。</div>';
+      if (!list.length) return h + '<div class="sec-t">目前沒有通緝中的劫掠客</div>';
+      h += '<table class="tbl"><tr><th>劫掠客</th><th>同盟</th><th>位置</th><th>領地</th><th>戰力</th><th>嚴重</th><th>狀態</th><th></th></tr>';
+      for (const q of list) {
+        const r = q.aiMem && q.aiMem.raid;
+        const sev = r ? Math.round(r.sev * 100) : 0;
+        const hunt = (G.hunts || []).some(x => !x.over && x.id === q.id);
+        const a = q.alliance >= 0 ? G.alliances[q.alliance] : null;
+        h += '<tr><td><b class="bad">' + E(q.name) + '</b></td><td>' + (a ? '〔' + E(a.name) + '〕' : '—') + '</td><td>(' + World.X(q.cityTile) + ',' + World.Y(q.cityTile) + ') ' + World.states[q.state].name + '</td><td>' + q.landCount + '</td><td>' + U.fmt(q.power) + '</td><td>' + sev + '%' + (r ? '<span class="muted">（欺負 ' + Object.keys(r.vic).length + ' 人）</span>' : '') + '</td><td>' + (q.captor >= 0 ? '<span class="good">淪陷中</span>' : hunt ? '<span class="warn">討伐中</span>' : '<span class="bad">逍遙法外</span>') + '</td><td><button class="btn small red" data-act="gotoplayer" data-pid="' + q.id + '">前往</button></td></tr>';
+      }
+      return h + '</table>';
     },
 
     rank() {
@@ -1153,6 +1194,36 @@ var UI = (function () {
     return { skills: r.skills.filter(id => id !== t.skill), why: r.why, web: r.web };
   }
 
+  // 這個戰法可以分解（傳承）哪些武將取得：傳承戰法為此戰法、三星以上的武將；標示你擁有哪幾位
+  function skillSourceHtml(sid) {
+    const src = HEROES.filter(x => x.inherit === sid && x.star >= 3);
+    if (!src.length) return '<div class="muted" style="font-size:12px">取得方式：無武將可傳承（事件戰法或武將自帶）</div>';
+    const own = x => user.heroes.filter(h => h.t === x.id);
+    const idle = x => own(x).filter(h => h.team < 0).length;
+    src.sort((a, b) => (idle(b) > 0) - (idle(a) > 0) || (own(b).length > 0) - (own(a).length > 0) || b.star - a.star);
+    const shown = src.slice(0, 8).map(x => {
+      const n = own(x).length, i = idle(x);
+      const tag = n ? (i ? ' <span class="good">你有 ' + n + ' 張，可分解</span>' : ' <span class="warn">你有 ' + n + ' 張（上陣中）</span>') : '';
+      return '<span title="' + E(x.faction + '・' + x.troop + '兵') + '">' + x.faction + '·' + E(x.name) + '★' + x.star + '</span>' + tag;
+    });
+    return '<div class="muted" style="font-size:12px">分解（傳承）可得：' + shown.join('、') + (src.length > 8 ? ' 等 ' + src.length + ' 位' : '') + '</div>';
+  }
+  // 隊伍配置清單：儲存、套用、刪除
+  function presetsHtml() {
+    const ps = user.presets || [];
+    let h = '<div class="sec-t">隊伍配置</div><div class="muted" style="font-size:12px">按部隊上的「儲存配置」記下目前陣容。部隊體力不夠時按「一鍵換隊」（或右上角部隊卡的 ⇄），會換上體力足夠、兵力最多的另一組配置。部隊需在主城待命。</div>';
+    if (!ps.length) return h + '<div class="muted" style="margin-top:6px">還沒有儲存的配置。</div>';
+    ps.forEach((pr, k) => {
+      const names = pr.slots.map(uid => { const x = Game.heroByUid(user, uid); return x ? Game.tpl(x).name : '—'; });
+      const sta = Math.floor(Game.presetStamina(user, pr));
+      const gone = pr.slots.some(uid => uid && !Game.heroByUid(user, uid));
+      h += '<div class="drill"><span style="min-width:72px"><b>' + E(pr.name) + '</b></span><span style="flex:1">' + names.map(E).join('・') + (gone ? ' <span class="bad">（有武將已不在）</span>' : '') + '　<span class="muted">體力 ' + sta + '</span></span>';
+      user.teams.forEach((t, ti) => { h += '<button class="btn small dark" data-act="applypreset" data-ti="' + ti + '" data-k="' + k + '">換入第' + '一二三四五'[ti] + '隊</button> '; });
+      h += '<button class="btn small" data-act="delpreset" data-k="' + k + '">刪除</button></div>';
+    });
+    return h;
+  }
+
   function heroDetail() {
     const h = Game.heroByUid(user, heroSel);
     if (!h) return '<div class="muted">選擇武將查看詳情</div>';
@@ -1190,7 +1261,7 @@ var UI = (function () {
       const rec = recFor(h);
       const opts = user.lib.filter(id => !h.sk.includes(id)).map(id => SKILLS[id]).filter(sk => !sk.troops || sk.troops.includes(t.troop))
         .sort((a, b) => rec.skills.includes(b.id) - rec.skills.includes(a.id));
-      o += opts.map(sk => '<div class="skslot" style="cursor:pointer" data-act="learn" data-k="' + panelArg.learn + '" data-sid="' + sk.id + '"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span>' + (rec.skills.includes(sk.id) ? '<span class="st" style="background:#2f6b3a">推薦</span>' : '') + '<div class="sd">' + sk.desc + (rec.skills.includes(sk.id) ? '<br><span class="good">推薦原因：' + rec.why + '</span>' : '') + '</div></div>').join('') || '<div class="muted">沒有可學習的戰法（可透過傳承獲得，A/S 級戰法需演練至 100%）</div>';
+      o += opts.map(sk => '<div class="skslot" style="cursor:pointer" data-act="learn" data-k="' + panelArg.learn + '" data-sid="' + sk.id + '"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span>' + (rec.skills.includes(sk.id) ? '<span class="st" style="background:#2f6b3a">推薦</span>' : '') + '<div class="sd">' + sk.desc + (rec.skills.includes(sk.id) ? '<br><span class="good">推薦原因：' + rec.why + '</span>' + skillSourceHtml(sk.id) : '') + '</div></div>').join('') || '<div class="muted">沒有可學習的戰法（可透過傳承獲得，A/S 級戰法需演練至 100%）</div>';
     }
     // 推薦戰法
     const rec = recFor(h);
@@ -1202,7 +1273,7 @@ var UI = (function () {
         const emptyK = [1, 2].find(k => Game.slotUnlocked(h, k) && !h.sk[k]);
         o += '<div class="skslot"><span class="sn q-' + sk.q + '">' + sk.name + '</span><span class="st">' + TY[sk.type] + '</span>' +
           (equipped ? ' <span class="good" style="font-size:12px">已裝備</span>' : has ? (emptyK ? ' <button class="btn small green" data-act="learn" data-k="' + emptyK + '" data-sid="' + sid + '">裝備</button>' : ' <span class="muted" style="font-size:12px">已擁有（可在上方「更換」）</span>') : ' <span class="muted" style="font-size:12px">尚未擁有（傳承或演練取得）</span>') +
-          '<div class="sd">' + sk.desc + '</div></div>';
+          '<div class="sd">' + sk.desc + '</div>' + skillSourceHtml(sid) + '</div>';
       }
     }
     // 進階/傳承

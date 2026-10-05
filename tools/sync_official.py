@@ -656,6 +656,31 @@ def main():
         cn_by_name.setdefault(h['key'], []).append(h)
 
     rows, used, alias, report = [], {}, {}, []
+    picked, extra_n = set(), 0
+
+    def official_row(name, o, skill=None):
+        sid = o.get('methodId')
+        iid = o.get('methodId1') or sid
+        sid, iid = (int(x) if x else None for x in (sid, iid))
+        for x, sfx in ((sid, ''), (iid, '1')):
+            if x and x not in skill_by_id and o.get('methodDesc' + sfx):
+                # 戰法圖鑑沒有、只在武將資料裡有說明的低階戰法（初級鼓舞、謊報等）：由武將欄位合成
+                d = strip_level_range(o['methodDesc' + sfx])
+                friendly = any(w in d for w in ('我軍', '友軍', '自身')) and '敵' not in d
+                skill_by_id[x] = tw_skill({'id': x, 'name': o['methodName' + sfx], 'type': '指揮' if friendly else '主動',
+                                           'probability': '--' if friendly else '35%', 'zfQuality': 'D',
+                                           'soldierType': '弓步騎', 'targetType': '', 'desc': d}, cc_t2s)
+            if x in skill_by_id and x not in used:
+                used[x] = parse_skill(skill_by_id[x], cc_s2t)
+        self_id = 'o%d' % sid if sid in used else skill
+        inh_id = 'o%d' % iid if iid in used else self_id
+        if skill and self_id != skill:
+            alias[skill] = self_id
+        return [
+            name, FACTIONS[o['country']], QUALITY_STAR[o['quality']], float(o['cost']), TROOPS[o['type']], int(o['distance']),
+            num(o['attack']), num(o['attGrow']), num(o['def']), num(o['defGrow']), num(o['ruse']), num(o['ruseGrow']),
+            num(o['speed']), num(o['speedGrow']), num(o['siege']), num(o['siegeGrow']), self_id, inh_id, o['icon'],
+        ]
     for r in BASE:
         name, faction, star, cost, troop, rng, atk, atkG, df, defG, it, intG, spd, spdG, siege, skill = r
         name_s = NAME_ALIAS.get(name)
@@ -668,23 +693,29 @@ def main():
                          round(siege / 4, 1), round(siege / 80, 2), skill, skill, 0])
             report.append('  %-6s（非官方，沿用）' % name)
             continue
-        sid = o.get('methodId')
-        iid = o.get('methodId1') or sid
-        sid, iid = (int(x) if x else None for x in (sid, iid))
-        for x in (sid, iid):
-            if x in skill_by_id and x not in used:
-                used[x] = parse_skill(skill_by_id[x], cc_s2t)
-        self_id = 'o%d' % sid if sid in used else skill
-        inh_id = 'o%d' % iid if iid in used else self_id
-        if self_id != skill:
-            alias[skill] = self_id
-        rows.append([
-            name, FACTIONS[o['country']], QUALITY_STAR[o['quality']], float(o['cost']), TROOPS[o['type']], int(o['distance']),
-            num(o['attack']), num(o['attGrow']), num(o['def']), num(o['defGrow']), num(o['ruse']), num(o['ruseGrow']),
-            num(o['speed']), num(o['speedGrow']), num(o['siege']), num(o['siegeGrow']), self_id, inh_id, o['icon'],
-        ])
+        if o['src'] == '台服':
+            picked.add(o['id'])
+        rows.append(official_row(name, o, skill))
         report.append('  %-6s ← [%s] %s（%s）自帶【%s】傳承【%s】' % (name, o['src'], o['disp'], o['quality'],
-                                                          used[sid][0]['name'] if sid in used else '-', used[iid][0]['name'] if iid in used else '-'))
+                                                          used[int(o['methodId'])][0]['name'] if int(o['methodId']) in used else '-',
+                                                          used[int(o.get('methodId1') or o['methodId'])][0]['name'] if int(o.get('methodId1') or o['methodId']) in used else '-'))
+
+    # 台服有、本作原名單沒有的武將：全部收錄（附加在原名單之後，不影響舊存檔的武將編號）
+    names = {r[0] for r in rows}
+    for o in sorted(tw_heroes, key=lambda h: (-QUALITY_STAR[h['quality']], h['id'])):
+        if o['id'] in picked or o['country'] not in FACTIONS:
+            continue
+        nm = o['name']
+        if nm in names:
+            nm = '%s（%s%s）' % (o['name'], o['contory'], o['type'])
+        if nm in names:
+            nm = '%s（%s%s%d★）' % (o['name'], o['contory'], o['type'], QUALITY_STAR[o['quality']])
+        if nm in names:
+            nm = '%s#%d' % (o['name'], o['id'])
+        names.add(nm)
+        picked.add(o['id'])
+        rows.append(official_row(nm, o))
+        extra_n += 1
 
     # 通用戰法：官方有同名戰法者改用官方數值（保留 id，讓 BASIC_SKILLS 與存檔可用）
     GENERIC = {'tuji': '突击', 'chongfeng': '冲锋', 'huogong': '火攻', 'luanji': '乱击', 'jijiu': '急救', 'jianshou': '坚守',

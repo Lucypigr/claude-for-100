@@ -125,5 +125,19 @@ var RECOMMEND = (function () {
     const picks = ids.filter(id => id && (!SKILLS[id].troops || !t || SKILLS[id].troops.includes(t.troop)));
     out[name] = { skills: picks, why: H[name][1], web: !!H[name][2] };
   }
+  // 沒有手寫推薦的武將（後來補進的台服武將）：依 30 級屬性自動推薦，並在說明中標示
+  function lv30(h, k) { return h[k] + h[k + 'G'] * 29; }
+  for (const h of HEROES) {
+    if (out[h.name]) continue;
+    const a = lv30(h, 'atk'), i = lv30(h, 'int'), d = lv30(h, 'def'), v = lv30(h, 'spd');
+    let pair, why;
+    if (i > a + 10 && i >= 90) { pair = v >= 100 ? ['眾謀不懈', '籌策絕道'] : ['眾謀不懈', '深謀遠慮']; why = '謀略（30級約' + Math.round(i) + '）遠高於攻擊，策略戰法吃謀略加成；眾謀不懈追加策略攻擊' + (v >= 100 ? '，籌策絕道全體高傷並降低敵方謀略速度' : '，深謀遠慮逐回合疊加策略傷害'); }
+    else if (a < 95 && i < 95) { pair = h.star <= 3 ? ['青囊秘要', '步步為營'] : ['擅兵不寡', '避其鋒芒']; why = '攻擊（30級約' + Math.round(a) + '）與謀略都不突出，偏輔助：被動回血與降傷讓全隊更耐打'; }
+    else if (d >= a * 0.95) { pair = ['步步為營', '愈戰愈勇']; why = '攻守均衡（攻擊約' + Math.round(a) + '、防禦約' + Math.round(d) + '），步步為營持續降傷，愈戰愈勇疊加增傷，越拖越強'; }
+    else if (h.troop === '騎' && v >= 110) { pair = ['疾擊其後', '怯心奪志']; why = '速度快（30級約' + Math.round(v) + '）的騎兵，疾擊其後先手追擊，怯心奪志封鎖敵方主動戰法'; }
+    else { pair = ['愈戰愈勇', '疾擊其後']; why = '攻擊（30級約' + Math.round(a) + '）為主的輸出型，愈戰愈勇疊加增傷，疾擊其後追加攻擊'; }
+    const picks = pair.map(n => byName[n]).filter(id => id && (!SKILLS[id].troops || SKILLS[id].troops.includes(h.troop)));
+    out[h.name] = { skills: picks, why: why + '（依屬性自動推薦）', web: false, auto: true };
+  }
   return out;
 })();

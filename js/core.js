@@ -1080,21 +1080,41 @@ var Game = (function () {
   }
 
   // ================= 戰鬥結算 =================
-  function npcSquad(lvl, count, heroLv, troops, key, city) {
-    const types = ['步', '騎', '弓'];
+  // NPC 守軍：由真實武將帶隊（星級隨土地/城池等級，黃巾軍營寨用黃巾系武將），沿用原本校準過的屬性強度
+  const NPC_STARS = { 1: [1, 2], 2: [1, 2], 3: [2, 3], 4: [3], 5: [3, 4], 6: [4], 7: [4, 5], 8: [4, 5], 9: [5], 10: [5] };
+  let npcPools = null;
+  function npcPool(lvl, theme) {
+    if (!npcPools) {
+      npcPools = { star: {}, yellow: [] };
+      for (const h of HEROES) (npcPools.star[h.star] = npcPools.star[h.star] || []).push(h);
+      for (const n of ['張角', '張梁', '張曼成', '管亥', '程遠志', '馬元義', '黃巾力士', '胡車兒', '裴元紹', '卞喜']) if (HERO_BY_NAME[n]) npcPools.yellow.push(HERO_BY_NAME[n]);
+    }
+    if (theme === 'yellow') return npcPools.yellow;
+    let out = [];
+    for (const st of NPC_STARS[Math.min(10, Math.max(1, lvl))] || [3]) out = out.concat(npcPools.star[st] || []);
+    return out.length ? out : HEROES;
+  }
+  function npcSquad(lvl, count, heroLv, troops, key, city, theme) {
     const units = [];
     const slots = count === 1 ? [0] : count === 2 ? [0, 2] : [0, 1, 2];
     const genericSk = ['tuji', 'huogong', 'luanji', 'jijiu', 'jianshou', 'fenzhan', 'zhenshe', 'jijianfang', 'poqianjun', 'guwu', 'kongluan', 'shisanhuan'];
+    const pool = npcPool(lvl, theme);
+    const used = new Set();
     for (let k = 0; k < count; k++) {
-      const tp = types[(key * 7 + k * 3) % 3];
+      // 同一守軍固定由同幾位武將組成（key 相同結果相同）；同隊不重複
+      let hero = pool[(key * 7 + k * 13 + lvl * 3) % pool.length];
+      for (let t = 1; used.has(hero.name) && t <= pool.length; t++) hero = pool[(key * 7 + k * 13 + lvl * 3 + t) % pool.length];
+      used.add(hero.name);
+      const tp = hero.troop;
       const sk = [];
-      if (lvl >= 3) sk.push(genericSk[(key * 5 + k * 11) % genericSk.length]);
+      const own = SKILLS[hero.skill];
+      if (lvl >= 3) sk.push(own && (!own.troops || own.troops.includes(tp)) ? hero.skill : genericSk[(key * 5 + k * 11) % genericSk.length]);
       if (lvl >= 7) sk.push(genericSk[(key * 13 + k * 7 + 3) % genericSk.length]);
-      const phys = (key + k) % 3 !== 2;
+      const phys = hero.role !== 'int';
       units.push({
-        name: (city ? '城防' : '') + tp + '兵守軍', faction: '群', troop: tp, troops: troops[k] !== undefined ? troops[k] : 0,
+        name: hero.name, faction: hero.faction, troop: tp, troops: troops[k] !== undefined ? troops[k] : 0,
         atk: (phys ? 48 : 30) + heroLv * (phys ? 2.2 : 1.2), def: 46 + heroLv * 2.05, int: (phys ? 32 : 50) + heroLv * (phys ? 1.1 : 2.2), spd: 45 + heroLv * 1.3,
-        range: tp === '弓' ? 4 : 2, skills: sk, skl: sk.map(() => Math.min(CFG.SKILL_MAX_LV, lvl)), slot: slots[k], lv: heroLv,
+        range: hero.range, skills: sk, skl: sk.map(() => Math.min(CFG.SKILL_MAX_LV, lvl)), slot: slots[k], lv: heroLv,
       });
     }
     return units;
@@ -1209,7 +1229,7 @@ var Game = (function () {
         for (let s = 0; s < squadsState.length && won; s++) {
           const sq = squadsState[s];
           if (sq.every(t => t <= 0)) continue;
-          const dUnits = npcSquad(isLand ? gLv : (city.lvl || 5), count, heroLv, sq, key + s, !!city);
+          const dUnits = npcSquad(isLand ? gLv : (city.lvl || 5), count, heroLv, sq, key + s, !!city, isLand && G.yellow && G.yellow.camps[i] ? 'yellow' : undefined);
           if (!(atkUnits.find(u => u.slot === 0 && u.troops > 0))) { won = false; break; }
           const res = Battle.simulate(atkUnits, dUnits, { log: !!report, wx: weatherAt(i) });
           applyLosses(p, res.A, outcomeOf(res, 0));

@@ -806,7 +806,7 @@ var Game = (function () {
         const tgtCity = T.city[target] >= 0 && World.cities[T.city[target]].type === 'main';
         if (o === G.userId) notify(o, (tgtCity ? '⚠ 主城' : '⚠ 領地') + '(' + World.X(target) + ',' + World.Y(target) + ') 即將遭到【' + p.name + '】攻擊！', 'bad');
         P[o].incoming = G.time;
-        if (P[o].ai) AI.onThreat(P[o], p, target, m);
+        AI.onThreat(P[o], p, target, m);
       }
     }
     return ok({ march: m });

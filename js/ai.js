@@ -789,7 +789,9 @@ var AI = (function () {
       const w = winP(perceived(p, ratio));
       const rd = persona(p) === 'raider' && (op.power < p.power * 0.7 || !op.ai || op.prof.type === 'newbie' || op.prof.type === 'casual');
       if (w < (rd ? 0.45 : 0.55)) continue;
-      let v = L * 60 + (rd ? 220 : 0) + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 150 : 0) - World.dist(i, team.base) * 5;
+      // 趁火打劫：對方剛被打、或正被別人圍攻時更容易成為目標
+      const hot = (op.lastLoss > 0 && g.time - op.lastLoss < 120 ? 110 : 0) + (op.incoming > 0 && g.time - op.incoming < 30 ? 90 : 0);
+      let v = L * 60 + (rd ? 220 : 0) + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 260 : 0) + hot - World.dist(i, team.base) * 5;
       if (op.power > p.power * 1.5 && o !== foe && persona(p) !== 'warmonger' && persona(p) !== 'raider') v -= 200; // 不惹強者（好戰者例外）
       if (p.landCount >= p.landCap && L < 5) continue;
       if (v > bs) { bs = v; best = i; }
@@ -1147,10 +1149,13 @@ var AI = (function () {
   }
 
   // ================= 事件回呼 =================
+  // 領地或主城遭到進攻：本人召回部隊（僅主城）、盟友出兵駐守，還會「圍魏救趙」反攻進攻者附近的土地，
+  // 讓同一區域同時出現多方部隊互相攻擊的混戰
   function onThreat(p, attacker, tile, march) {
-    const pr = p.prof;
+    const g = G();
+    const pr = p.prof || { skill: 0.5, chat: 0.5 };
     const isMain = Game.T.city[tile] >= 0 && World.cities[Game.T.city[tile]].type === 'main';
-    if (isMain) {
+    if (p.ai && isMain) {
       if (U.rnd() < pr.skill) {
         // 召回附近部隊守城
         for (const t of p.teams) {
@@ -1160,25 +1165,55 @@ var AI = (function () {
           }
         }
       }
-      if (p.alliance >= 0 && U.rnd() < pr.chat + 0.3) later(p, 'ally', U.pick(CHAT.help).replace('{n}', attacker.name).replace('{xy}', '(' + World.X(tile) + ',' + World.Y(tile) + ')'), U.rint(0, 3));
-      // 盟友支援駐守
-      if (p.alliance >= 0) {
-        const a = Game.G.alliances[p.alliance];
-        let sent = 0;
-        for (const id of a.members) {
-          if (sent >= 2) break;
-          const q = Game.P[id];
-          if (!q.ai || q === p || U.rnd() > q.prof.skill * 0.7) continue;
-          for (const t of q.teams) {
-            if (!Game.teamReady(q, t, CFG.COST_GARRISON)) continue;
-            const eta = Game.marchTime(q, t, t.base, tile);
-            if (G().time + eta >= march.end) continue;
-            const r = Game.send(q, t.id, tile, 'garrison');
-            if (r.ok) { sent++; later(q, 'ally', U.pick(CHAT.support).replace('{n}', p.name), U.rint(0, 2)); break; }
-          }
+    }
+    if (p.alliance < 0) return;
+    const xy = '(' + World.X(tile) + ',' + World.Y(tile) + ')';
+    if (p.ai && isMain && U.rnd() < pr.chat + 0.3) later(p, 'ally', U.pick(CHAT.help).replace('{n}', attacker.name).replace('{xy}', xy), U.rint(0, 3));
+    const a = g.alliances[p.alliance];
+    let sent = 0, struck = 0;
+    for (const id of a.members) {
+      if (sent >= 2 && struck >= 2) break;
+      const q = Game.P[id];
+      if (!q.ai || q === p || (q.aiMem && g.time - (q.aiMem.lastAssist || -999) < 15)) continue;
+      const sk = q.prof.skill;
+      // 1) 出兵駐守受襲的領地（主城更積極）
+      if (sent < 2 && U.rnd() < sk * (isMain ? 0.7 : 0.45)) {
+        for (const t of q.teams) {
+          if (!Game.teamReady(q, t, CFG.COST_GARRISON)) continue;
+          const eta = Game.marchTime(q, t, t.base, tile);
+          if (G().time + eta >= march.end) continue;
+          const r = Game.send(q, t.id, tile, 'garrison');
+          if (r.ok) { sent++; mem(q).lastAssist = g.time; if (isMain || U.chance(0.3)) later(q, 'ally', U.pick(CHAT.support).replace('{n}', p.name), U.rint(0, 2)); break; }
         }
       }
+      // 2) 圍魏救趙：反攻進攻者在附近的土地（侵略性高的盟友）
+      if (struck < 2 && U.rnd() < q.prof.aggr * sk * 0.6 && attacker.landCount > 0) {
+        if (counterStrike(q, attacker, tile)) { struck++; mem(q).lastAssist = g.time; if (U.chance(0.25)) later(q, 'ally', U.pick(CHAT.counter).replace('{n}', attacker.name), U.rint(0, 3)); }
+      }
     }
+  }
+  function counterStrike(q, attacker, tile) {
+    const T = Game.T;
+    let best = -1, bd = 1e9;
+    const lands = attacker.lands;
+    for (let k = 0; k < Math.min(120, lands.length); k++) {
+      const i = lands[lands.length > 120 ? (U.rnd() * lands.length) | 0 : k];
+      if (T.city[i] >= 0) continue;
+      const d = World.dist(i, tile);
+      if (d < bd && d <= 16) { bd = d; best = i; }
+    }
+    if (best < 0 || Game.attackBlock(q, best)) return false;
+    drawNoise(q);
+    for (const t of q.teams) {
+      if (!Game.teamReady(q, t, CFG.COST_ATTACK) || t.status !== 'idle') continue;
+      const cap = Game.teamCapTroops(q, t);
+      if (!cap || Game.teamTroops(q, t) / cap < 0.5) continue;
+      const L = T.lvl[best];
+      const tp = Game.teamPower(q, t);
+      if (winP(perceived(q, mtp(q, t, tp, best) / (GP[L] * R50[L]) * 0.7)) < 0.5) continue;
+      if (Game.send(q, t.id, best, 'attack').ok) return true;
+    }
+    return false;
   }
   function onAttacked(p, attacker, tile, winner) {
     p.grudge[attacker.id] = G().time;

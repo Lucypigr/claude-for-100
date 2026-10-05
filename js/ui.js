@@ -36,6 +36,8 @@ var UI = (function () {
     if (auto && Game.hasSave()) setTimeout(continueGame, 0);
     document.addEventListener('click', onClick);
     $('#chatform').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
+    // 中文輸入法選字時按 Enter 不應送出訊息
+    $('#chatin').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) e.preventDefault(); });
     bindMap();
     document.addEventListener('keydown', onKey);
   }
@@ -243,7 +245,7 @@ var UI = (function () {
     const v = $('#chatin').value.trim();
     if (!v) return;
     const r = Game.say(user, chatTab === 'ally' ? 'ally' : 'world', v);
-    if (!r.ok) toast(r.msg, 'warn');
+    if (!r.ok) { toast(r.msg, 'warn'); return; } // 發送失敗（例如尚未加入同盟）要保留輸入內容
     $('#chatin').value = '';
   }
   function hudToasts() {

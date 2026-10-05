@@ -43,16 +43,16 @@ var Mobile = (function () {
     // iOS Safari 會忽略 user-scalable=no：擋掉雙指縮放手勢
     for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, e => e.preventDefault(), opt);
     // 多指觸控一律不讓瀏覽器縮放；單指只允許在可捲動區塊內捲動（擋掉整頁捲動與橡皮筋回彈）
+    // 手指輕微晃動（點按時很常見）不要擋，否則按鈕的點擊會被吃掉
+    let t0 = null;
+    document.addEventListener('touchstart', e => { t0 = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null; }, { passive: true });
     document.addEventListener('touchmove', e => {
-      if (e.touches.length > 1 || !canScroll(e.target)) e.preventDefault();
+      if (e.touches.length > 1) { e.preventDefault(); return; }
+      if (canScroll(e.target)) return;
+      if (t0 && Math.hypot(e.touches[0].clientX - t0.x, e.touches[0].clientY - t0.y) < 12) return;
+      e.preventDefault();
     }, opt);
-    // 快速點兩下不放大
-    let lastTouch = 0;
-    document.addEventListener('touchend', e => {
-      const now = Date.now();
-      if (now - lastTouch < 300 && !e.target.closest('input, select, textarea')) e.preventDefault();
-      lastTouch = now;
-    }, opt);
+    // 不再攔截「快速連點」：頁面已設 touch-action 禁止雙擊放大，攔截只會讓連續點按鈕（例如加點 +1、強化戰法）被吃掉
     window.addEventListener('orientationchange', onRotate);
     if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener('change', onRotate);
     window.addEventListener('resize', onRotate);

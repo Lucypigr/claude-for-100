@@ -137,8 +137,9 @@ var UI = (function () {
     for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, rel, true);
   }
   // 內容沒變就不重建；正在被按的區塊也不重建（稍後下一次更新再補上）
-  function setHtml(el, html) {
-    if (el._h === html || (pressedEl && pressedEl === el)) return false;
+  // auto = 定時自動更新（才會因被按住而延後）；使用者點擊觸發的重繪一定要立刻更新，否則點了按鈕畫面沒反應
+  function setHtml(el, html, auto) {
+    if (el._h === html || (auto && pressedEl && pressedEl === el)) return false;
     el._h = html; el.innerHTML = html;
     return true;
   }
@@ -162,7 +163,7 @@ var UI = (function () {
       const typing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && $('#modal').contains(ae);
       if (['city', 'teams', 'season', 'alliance', 'quests'].includes(panel) && !teamPick && !typing && !(pressedEl && pressedEl.id === 'modal')) refreshPanel(true);
     }
-    if (tileSel >= 0 && now - (update.tp || 0) > 1000) { update.tp = now; if (tilePopMode === 'info') renderTilePop(); }
+    if (tileSel >= 0 && now - (update.tp || 0) > 1000) { update.tp = now; if (tilePopMode === 'info') renderTilePop(true); }
     if (G.over && !update.shownOver) { update.shownOver = true; openPanel('settle'); }
   }
   function hudTop() {
@@ -182,7 +183,7 @@ var UI = (function () {
     h += '<div class="res" title="戰法點：用於升級戰法，可由武將轉化取得"><i class="ri skp">法</i><b>' + U.fmt(user.skp) + '</b></div>';
     h += '<div class="res" title="銅幣"><i class="ri copper">銅</i><b>' + U.fmt(user.copper) + '</b><small>+' + U.fmt(user.prod.copper) + '</small><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
     h += '<div class="res" title="金銖"><i class="ri gold">金</i><b>' + U.fmt(user.gold) + '</b><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
-    setHtml($('#resbar'), h);
+    setHtml($('#resbar'), h, true);
     const ph = Game.phase();
     $('#clock-time').textContent = U.fmtClock(G.time);
     $('#clock-phase').textContent = '賽季 ' + (Game.day() + 1) + '/' + CFG.SEASON_DAYS + ' 天・' + ph.name;
@@ -232,7 +233,7 @@ var UI = (function () {
       h += '</div>';
     });
     // 內容沒變就不重建，且按住滑鼠/手指時不重建，避免點擊落在被替換掉的按鈕上
-    setHtml($('#teampanel'), h);
+    setHtml($('#teampanel'), h, true);
     placeTeamPanel();
   }
   // 手機直屏：資源列會折成 2~3 列，隊伍面板要排在資源列正下方，否則「自動增兵」列會被蓋住
@@ -249,7 +250,7 @@ var UI = (function () {
     if (threats.length) {
       const m = threats.sort((a, b) => a.end - b.end)[0];
       const isMain = Game.T.city[m.to] >= 0 && World.cities[Game.T.city[m.to]].type === 'main';
-      setHtml(el, '⚠ ' + threats.length + ' 支敵軍來襲！' + (isMain ? '<b>主城</b>' : '') + ' 最快 ' + U.fmtDur(m.end - G.time) + ' 後抵達 (' + World.X(m.to) + ',' + World.Y(m.to) + ')');
+      setHtml(el, '⚠ ' + threats.length + ' 支敵軍來襲！' + (isMain ? '<b>主城</b>' : '') + ' 最快 ' + U.fmtDur(m.end - G.time) + ' 後抵達 (' + World.X(m.to) + ',' + World.Y(m.to) + ')', true);
       el.dataset.tile = m.to;
       el.classList.remove('hidden');
     } else el.classList.add('hidden');
@@ -259,7 +260,7 @@ var UI = (function () {
     const el = $('#quest-mini');
     if (!q) { el.classList.add('hidden'); return; }
     const done = q.check(user);
-    setHtml(el, '<div class="qt">主線：' + q.name + '</div><div class="' + (done ? 'done' : 'muted') + '">' + q.desc + (done ? '　✔ 可領取' : '') + '</div>');
+    setHtml(el, '<div class="qt">主線：' + q.name + '</div><div class="' + (done ? 'done' : 'muted') + '">' + q.desc + (done ? '　✔ 可領取' : '') + '</div>', true);
     el.dataset.act = 'open'; el.dataset.panel = 'quests';
   }
   function hudBadges() {
@@ -421,7 +422,7 @@ var UI = (function () {
     if (T.terrain[i] === TERRAIN.WATER) return '河流';
     return CFG.RES_NAME[CFG.RES[T.res[i]]] + ' <small>Lv.' + T.lvl[i] + '</small>';
   }
-  function renderTilePop() {
+  function renderTilePop(auto) {
     const i = tileSel;
     if (i < 0) return;
     const T = Game.T;
@@ -433,7 +434,7 @@ var UI = (function () {
     const owner = Game.tileOwner(i), alli = Game.tileAlliance(i);
     if (T.terrain[i] === TERRAIN.MOUNTAIN || T.terrain[i] === TERRAIN.WATER) {
       h += '<div class="muted">無法通行，也無法佔領。</div></div>';
-      setHtml(el, h); return;
+      setHtml(el, h, auto); return;
     }
     if (owner >= 0) {
       const o = Game.P[owner];
@@ -511,7 +512,7 @@ var UI = (function () {
       h += '</div>';
       if (!friendly && why) h += '<div class="why">' + why + '</div>';
     }
-    setHtml(el, h);
+    setHtml(el, h, auto);
   }
   function row(a, b) { return '<div class="row"><span>' + a + '</span><span>' + b + '</span></div>'; }
   function estLabel(w) {

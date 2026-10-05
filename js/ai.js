@@ -10,7 +10,7 @@ var AI = (function () {
     whale: { label: '課長', skill: [0.45, 0.9], act: [2, 6], aggr: [0.55, 1.0], gold: [18000, 50000], daily: [2500, 7000], chat: 1.0 },
   };
   const RAID_NAMES = ['劫火', '黑旗', '血狼', '鬼影', '屠城', '夜梟', '斷刃', '餓狼', '焚天', '裂空', '蝗群', '修羅'];
-  const MIX = [['newbie', 30], ['casual', 25], ['regular', 45], ['veteran', 30], ['whale', 20]];
+  const MIX = [['newbie', 34], ['casual', 28], ['regular', 50], ['veteran', 18], ['whale', 10]]; // 強力玩家（老手＋課長）約占 2 成
   // 土地守軍「50%勝率」所需戰力倍數（由離線模擬校準）
   let GP = null, CP = null;
   const R50 = [0, 0.6, 0.8, 1.45, 1.75, 1.9, 1.75, 1.65, 1.6, 1.55];
@@ -282,6 +282,16 @@ var AI = (function () {
         if (f.team >= 0) continue;
         if (main.adv < 5 && Game.tpl(main).star >= 3 && U.rnd() < 0.4 + pr.skill) Game.advanceHero(p, main.uid, f.uid);
         else if (Game.tpl(f).star >= 3 && !p.lib.includes(Game.tpl(f).inherit) && U.rnd() < pr.skill) Game.inheritHero(p, f.uid);
+      }
+    }
+    // 榮譽點兌換武將：負擔得起就換最高星級（技術高的更常兌換、更偏好高星）
+    if ((p.honor || 0) >= 450 && U.rnd() < 0.3 + pr.skill * 0.5) {
+      for (const st of [5, 4, 3]) {
+        if (p.honor < Game.HONOR_PRICE[st] || (st === 3 && pr.skill < 0.4)) continue;
+        const pool = HEROES.filter(t => t.star === st && !p.heroes.some(h => h.t === t.id));
+        if (!pool.length) continue;
+        Game.exchangeHonor(p, U.pick(pool).id);
+        break;
       }
     }
     // 事件戰法：集齊武將就兌換
@@ -743,14 +753,15 @@ var AI = (function () {
     const reckless = U.rnd() < (1 - pr.skill) * 0.3;
     for (const i of cands) {
       if (T.owner[i] >= 0) continue; // 他人土地交給 PvP 邏輯
-      const L = T.lvl[i];
+      const L = Game.effLvl(i); // 黃巾軍營寨的守軍較強
       const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L]);
       const pr2 = winP(perceived(p, ratio));
       const need = reckless ? 0.25 : 0.45 + pr.skill * 0.3;
       if (pr2 < need) continue;
       if (atCap && L <= minOwned + 1 && pr.skill > 0.4) continue;
       const d = World.dist(i, team.base);
-      let v = CFG.LAND_OUTPUT[L] * w[CFG.RES[T.res[i]]] * (0.5 + pr2) + (p.firstCap[i] ? 0 : L * 25) - d * 6;
+      let v = CFG.LAND_OUTPUT[T.lvl[i]] * w[CFG.RES[T.res[i]]] * (0.5 + pr2) + (p.firstCap[i] ? 0 : T.lvl[i] * 25) - d * 6;
+      if (Game.G.yellow && Game.G.yellow.camps[i]) v += 140 + pr.skill * 120; // 黃巾軍營寨：榮譽點可兌換武將，高手更愛打
       // 升級期偏好經驗高的地
       v += CFG.GARRISON[L][0] * CFG.GARRISON[L][1] * CFG.GARRISON[L][3] * 0.02;
       if (reckless) v += U.rnd() * 400;

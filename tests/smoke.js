@@ -56,3 +56,37 @@ for (const h of S.HEROES) {
   if (u.teams[0].slots.join() !== a.map(h => h.uid).join()) throw new Error('slots after swap');
   console.log('team presets + swapTired OK; wantedList', S.Game.wantedList().length);
 }
+
+// 天氣：決定性、行軍時間與屯田
+{
+  S.Weather.setSeed(999);
+  const a = S.Weather.key('并州', 24 * 1440), b = S.Weather.key('并州', 24 * 1440);
+  if (a !== b) throw new Error('weather not deterministic');
+  const seen = new Set(); for (let t = 0; t < 30 * 1440; t += 360) for (const st of ['并州', '揚州', '涼州']) seen.add(S.Weather.key(st, t));
+  if (seen.size < 5) throw new Error('weather too uniform ' + [...seen]);
+  const snowT = (() => { for (let t = 24 * 1440; t < 30 * 1440; t += 360) if (S.Weather.key('并州', t) === 'snow') return t; return -1; })();
+  if (snowT < 0) throw new Error('no snow in northern winter');
+  const G3 = S.Game.newGame({ seed: 5150, userName: '天氣測試' });
+  const u3 = G3.players[G3.userId];
+  const tile = u3.lands[0] !== undefined ? u3.lands[0] : u3.cityTile;
+  G3.time = snowT;
+  const wxSt = S.World.states[S.Game.T.state[tile]].name;
+  console.log('weather OK', S.Weather.at(wxSt, G3.time).name);
+}
+// 黃巾軍與榮譽兌換
+{
+  const G4 = S.Game.newGame({ seed: 777, userName: '黃巾測試' });
+  const u4 = G4.players[G4.userId];
+  G4.time = 1440 * 3;
+  for (let k = 0; k < 400 && !(G4.yellow && Object.keys(G4.yellow.camps).length); k++) S.Game.tick();
+  const n = G4.yellow ? Object.keys(G4.yellow.camps).length : 0;
+  if (n < 1) throw new Error('no yellow camps spawned');
+  const t0 = +Object.keys(G4.yellow.camps)[0];
+  if (S.Game.effLvl(t0) !== Math.min(9, S.Game.T.lvl[t0] + 2)) throw new Error('camp level');
+  u4.honor = 100;
+  if (S.Game.exchangeHonor(u4, S.HERO_BY_NAME['呂布'].id).ok) throw new Error('should be too expensive');
+  u4.honor = 5000;
+  const before = u4.heroes.length, r = S.Game.exchangeHonor(u4, S.HERO_BY_NAME['呂布'].id);
+  if (!r.ok || u4.heroes.length !== before + 1 || Math.round(u4.honor) !== 0) throw new Error('exchange failed ' + JSON.stringify(r));
+  console.log('yellow camps + honor exchange OK (' + n + ' camps)');
+}

@@ -11,6 +11,7 @@ var Game = (function () {
     opts = opts || {};
     const seed = opts.seed || (Date.now() & 0x7fffffff);
     U.setSeed(seed ^ 0x5bd1e995);
+    Weather.setSeed(seed ^ 0x2545f491);
     const aiN = opts.aiCount === undefined ? CFG.AI_COUNT : opts.aiCount;
     const mapN = opts.mapN || CFG.mapSizeFor(aiN);
     World.generate(seed, mapN, CFG.MAP_GEN_VER);
@@ -839,8 +840,10 @@ var Game = (function () {
     const from = baseValid(p, team.base) ? team.base : p.cityTile;
     return CFG.moraleAt(World.dist(from, target));
   }
+  // 天氣：某格所在州目前的天氣
+  function weatherAt(tile) { return Weather.at(World.states[T.state[tile]].name, G.time); }
   function marchTime(p, team, from, to) {
-    return Math.max(2, Math.round(World.dist(from, to) * CFG.minPerTile(teamSpeed(p, team))));
+    return Math.max(2, Math.round(World.dist(from, to) * CFG.minPerTile(teamSpeed(p, team)) * weatherAt(to).time));
   }
   function send(p, ti, target, type) {
     const team = p.teams[ti];
@@ -850,6 +853,7 @@ var Game = (function () {
     const base = heroByUid(p, team.slots[0]);
     if (!base) return err('部隊缺少大營武將');
     if (base.troops <= 0) return err('大營武將兵力不足');
+    if (type === 'farm' && !weatherAt(target).farm) return err('暴雪冬歇，無法屯田');
     const cost = { attack: CFG.COST_ATTACK, move: CFG.COST_MOVE, garrison: CFG.COST_GARRISON, farm: CFG.COST_FARM, train: CFG.COST_TRAIN, sweep: CFG.COST_SWEEP }[type];
     if (cost === undefined) return err('無效行動');
     if (teamMinSta(p, team) < cost) return err('武將體力不足（需要 ' + cost + '）');
@@ -877,7 +881,7 @@ var Game = (function () {
     // 被攻擊方預警
     if (type === 'attack') {
       const o = tileOwner(target);
-      if (o >= 0 && o !== p.id) {
+      if (o >= 0 && o !== p.id && !weatherAt(target).ambush) { // 大霧時進攻不會預警（奇襲）
         const tgtCity = T.city[target] >= 0 && World.cities[T.city[target]].type === 'main';
         if (o === G.userId) notify(o, (tgtCity ? '⚠ 主城' : '⚠ 領地') + '(' + World.X(target) + ',' + World.Y(target) + ') 即將遭到【' + p.name + '】攻擊！', 'bad');
         P[o].incoming = G.time;
@@ -1010,7 +1014,7 @@ var Game = (function () {
     for (let sq = 0; sq < g[0] && won; sq++) {
       if (!atkUnits.find(u => u.slot === 0 && u.troops > 0)) { won = false; break; }
       const dUnits = npcSquad(T.lvl[i], g[1], g[2], new Array(g[1]).fill(g[3]), i + sq, false);
-      const res = Battle.simulate(atkUnits, dUnits, { log: !!report });
+      const res = Battle.simulate(atkUnits, dUnits, { log: !!report, wx: weatherAt(i) });
       applyLosses(p, res.A, outcomeOf(res, 0));
       syncUnits(atkUnits, res.A);
       kills += killsOf(res.D);
@@ -1027,28 +1031,98 @@ var Game = (function () {
     }
   }
 
+  // ================= 黃巾軍事件 =================
+  // 黃巾軍營寨定期出現在玩家領地旁的無主地；擊破可得榮譽點，榮譽點可兌換武將（五星要累積很久）
+  const YELLOW = { PERIOD: 360, LIFE: 1080, MIN_LV: 3, MAX_LV: 8 };
+  function honorOf(lvl) { return 40 + 25 * lvl; }
+  const HONOR_PRICE = { 2: 150, 3: 450, 4: 1500, 5: 5000 };
+  function yellowTick(now) {
+    if (!G.yellow) G.yellow = { camps: {}, next: 0 };
+    const y = G.yellow;
+    for (const k in y.camps) if (y.camps[k].until <= now) delete y.camps[k];
+    if (now < y.next || now < CFG.PROTECT_DAYS * 1440 * 0.4) return;
+    y.next = now + YELLOW.PERIOD;
+    const n = Math.max(3, Math.min(40, Math.round((P.length - 1) / 10)));
+    const live = P.filter(q => q.landCount > 0 && q.captor < 0);
+    if (!live.length) return;
+    let made = 0, near = false;
+    for (let k = 0; k < n * 4 && made < n; k++) {
+      const p = k === 0 || (k % 7 === 0) ? P[G.userId] : live[(U.rnd() * live.length) | 0];
+      if (!p || !p.lands.length) continue;
+      const i = p.lands[(U.rnd() * p.lands.length) | 0];
+      const nb = [];
+      World.neighbors8(i, nb);
+      for (let t = nb.length - 1; t > 0; t--) { const j = (U.rnd() * (t + 1)) | 0; [nb[t], nb[j]] = [nb[j], nb[t]]; }
+      for (const t of nb) {
+        if (T.owner[t] >= 0 || T.city[t] >= 0 || T.terrain[t] !== 0 || y.camps[t] || T.state[t] !== T.state[i]) continue;
+        if (T.lvl[t] < YELLOW.MIN_LV || T.lvl[t] > YELLOW.MAX_LV) continue;
+        y.camps[t] = { lvl: T.lvl[t], until: now + YELLOW.LIFE, since: now };
+        markDirty(t);
+        made++;
+        if (p.id === G.userId) near = true;
+        break;
+      }
+    }
+    if (made) {
+      sys('world', '【黃巾軍】黃巾賊起，各地出現 ' + made + ' 處營寨！擊破可得榮譽點，限時 ' + (YELLOW.LIFE / 60) + ' 小時');
+      if (near) notify(G.userId, '黃巾軍在你的領地附近設下營寨！到「榮譽」面板查看位置', 'warn');
+    }
+  }
+  function exchangeHonor(p, heroId) {
+    const t = HEROES[heroId];
+    if (!t) return err('武將不存在');
+    const price = HONOR_PRICE[t.star];
+    if (!price) return err('此星級無法兌換');
+    if ((p.honor || 0) < price) return err('榮譽點不足（需要 ' + price + '，目前 ' + Math.floor(p.honor || 0) + '）');
+    p.honor -= price;
+    const h = addHero(p, heroId);
+    return ok({ hero: h, price });
+  }
+
   // ================= 戰鬥結算 =================
-  function npcSquad(lvl, count, heroLv, troops, key, city) {
-    const types = ['步', '騎', '弓'];
+  // NPC 守軍：由真實武將帶隊（星級隨土地/城池等級，黃巾軍營寨用黃巾系武將），沿用原本校準過的屬性強度
+  const NPC_STARS = { 1: [1, 2], 2: [1, 2], 3: [2, 3], 4: [3], 5: [3, 4], 6: [4], 7: [4, 5], 8: [4, 5], 9: [5], 10: [5] };
+  let npcPools = null;
+  function npcPool(lvl, theme) {
+    if (!npcPools) {
+      npcPools = { star: {}, yellow: [] };
+      for (const h of HEROES) (npcPools.star[h.star] = npcPools.star[h.star] || []).push(h);
+      for (const n of ['張角', '張梁', '張曼成', '管亥', '程遠志', '馬元義', '黃巾力士', '胡車兒', '裴元紹', '卞喜']) if (HERO_BY_NAME[n]) npcPools.yellow.push(HERO_BY_NAME[n]);
+    }
+    if (theme === 'yellow') return npcPools.yellow;
+    let out = [];
+    for (const st of NPC_STARS[Math.min(10, Math.max(1, lvl))] || [3]) out = out.concat(npcPools.star[st] || []);
+    return out.length ? out : HEROES;
+  }
+  function npcSquad(lvl, count, heroLv, troops, key, city, theme) {
     const units = [];
     const slots = count === 1 ? [0] : count === 2 ? [0, 2] : [0, 1, 2];
     const genericSk = ['tuji', 'huogong', 'luanji', 'jijiu', 'jianshou', 'fenzhan', 'zhenshe', 'jijianfang', 'poqianjun', 'guwu', 'kongluan', 'shisanhuan'];
+    const pool = npcPool(lvl, theme);
+    const used = new Set();
     for (let k = 0; k < count; k++) {
-      const tp = types[(key * 7 + k * 3) % 3];
+      // 同一守軍固定由同幾位武將組成（key 相同結果相同）；同隊不重複
+      let hero = pool[(key * 7 + k * 13 + lvl * 3) % pool.length];
+      for (let t = 1; used.has(hero.name) && t <= pool.length; t++) hero = pool[(key * 7 + k * 13 + lvl * 3 + t) % pool.length];
+      used.add(hero.name);
+      const tp = hero.troop;
       const sk = [];
-      if (lvl >= 3) sk.push(genericSk[(key * 5 + k * 11) % genericSk.length]);
+      const own = SKILLS[hero.skill];
+      if (lvl >= 3) sk.push(own && (!own.troops || own.troops.includes(tp)) ? hero.skill : genericSk[(key * 5 + k * 11) % genericSk.length]);
       if (lvl >= 7) sk.push(genericSk[(key * 13 + k * 7 + 3) % genericSk.length]);
-      const phys = (key + k) % 3 !== 2;
+      const phys = hero.role !== 'int';
       units.push({
-        name: (city ? '城防' : '') + tp + '兵守軍', faction: '群', troop: tp, troops: troops[k] !== undefined ? troops[k] : 0,
+        name: hero.name, faction: hero.faction, troop: tp, troops: troops[k] !== undefined ? troops[k] : 0,
         atk: (phys ? 48 : 30) + heroLv * (phys ? 2.2 : 1.2), def: 46 + heroLv * 2.05, int: (phys ? 32 : 50) + heroLv * (phys ? 1.1 : 2.2), spd: 45 + heroLv * 1.3,
-        range: tp === '弓' ? 4 : 2, skills: sk, skl: sk.map(() => Math.min(CFG.SKILL_MAX_LV, lvl)), slot: slots[k], lv: heroLv,
+        range: hero.range, skills: sk, skl: sk.map(() => Math.min(CFG.SKILL_MAX_LV, lvl)), slot: slots[k], lv: heroLv,
       });
     }
     return units;
   }
+  // 黃巾軍營寨：守軍強度比土地等級高 2 級（最高 9 級）
+  function effLvl(i) { return G.yellow && G.yellow.camps[i] ? Math.min(9, T.lvl[i] + 2) : T.lvl[i]; }
   function landGarrison(i) {
-    const lv = T.lvl[i];
+    const lv = effLvl(i);
     const g = CFG.GARRISON[lv];
     let st = G.landSiege[i];
     if (st && st.until < G.time) { delete G.landSiege[i]; st = null; }
@@ -1120,7 +1194,7 @@ var Game = (function () {
     const defs = defendersAt(i, p);
     for (const d of defs) {
       const dUnits = teamUnits(d.p, d.team);
-      const res = Battle.simulate(atkUnits, dUnits, { log: !!report || d.p.id === G.userId });
+      const res = Battle.simulate(atkUnits, dUnits, { log: !!report || d.p.id === G.userId, wx: weatherAt(i) });
       applyLosses(p, res.A, outcomeOf(res, 0)); applyLosses(d.p, res.D, outcomeOf(res, 1));
       syncUnits(atkUnits, res.A);
       const kA = killsOf(res.D), kD = killsOf(res.A);
@@ -1135,10 +1209,10 @@ var Game = (function () {
     }
     // 2) NPC 守軍
     if (won) {
-      let squadsState = null, heroLv = 0, count = 3, isLand = false, cityNpc = false, key = i;
+      let squadsState = null, heroLv = 0, count = 3, isLand = false, cityNpc = false, key = i, gLv = T.lvl[i];
       if (!city) {
         const lg = landGarrison(i);
-        squadsState = lg.st.squads; heroLv = lg.heroLv; count = lg.count; isLand = true;
+        squadsState = lg.st.squads; heroLv = lg.heroLv; count = lg.count; isLand = true; gLv = lg.lv;
         G.landSiege[i] = lg.st; lg.st.until = G.time + 30;
       } else if (city.type === 'main' || (city.type === 'branch' && !(city.building > G.time))) {
         const o = P[city.owner];
@@ -1155,9 +1229,9 @@ var Game = (function () {
         for (let s = 0; s < squadsState.length && won; s++) {
           const sq = squadsState[s];
           if (sq.every(t => t <= 0)) continue;
-          const dUnits = npcSquad(isLand ? T.lvl[i] : (city.lvl || 5), count, heroLv, sq, key + s, !!city);
+          const dUnits = npcSquad(isLand ? gLv : (city.lvl || 5), count, heroLv, sq, key + s, !!city, isLand && G.yellow && G.yellow.camps[i] ? 'yellow' : undefined);
           if (!(atkUnits.find(u => u.slot === 0 && u.troops > 0))) { won = false; break; }
-          const res = Battle.simulate(atkUnits, dUnits, { log: !!report });
+          const res = Battle.simulate(atkUnits, dUnits, { log: !!report, wx: weatherAt(i) });
           applyLosses(p, res.A, outcomeOf(res, 0));
           syncUnits(atkUnits, res.A);
           // 寫回守軍兵力
@@ -1189,6 +1263,15 @@ var Game = (function () {
           p.stats.maxLandLv = Math.max(p.stats.maxLandLv, T.lvl[i]);
           if (!p.firstCap[i]) { p.firstCap[i] = 1; p.fame += T.lvl[i] * CFG.FAME_PER_LVL; recompute(p); }
           result = '勝利，佔領土地';
+          const camp = G.yellow && G.yellow.camps[i];
+          if (camp) {
+            delete G.yellow.camps[i];
+            const hp = honorOf(camp.lvl);
+            p.honor = (p.honor || 0) + hp;
+            p.stats.yellow = (p.stats.yellow || 0) + 1;
+            if (p.id === G.userId) { result += '，擊破黃巾軍營寨，獲得榮譽點 ' + hp; notify(p.id, '擊破黃巾軍營寨！獲得榮譽點 +' + hp + '（共 ' + p.honor + '）', 'good'); }
+            else if (U.chance(0.3)) sys('world', '【黃巾軍】' + p.name + ' 擊破了一處黃巾軍營寨');
+          }
           if (prev >= 0) {
             const op = P[prev];
             op.lastLoss = G.time;
@@ -1418,9 +1501,23 @@ var Game = (function () {
     G.time += 1;
     const now = G.time;
     // 資源
+    yellowTick(now);
+    // 天氣每 6 小時換一次：更新各州產量倍率，並提醒玩家所在州的天氣變化
+    const wb = Math.floor(now / Weather.BLOCK);
+    if (G._wb !== wb) {
+      G._wb = wb;
+      G._wm = World.states.map(s => Weather.at(s.name, now).prod);
+      const u = P[G.userId];
+      if (u && u.state !== undefined) {
+        const w = Weather.at(World.states[u.state].name, now);
+        if (w.name !== (G._wn || '') && now > 0) notify(u.id, '【天氣】' + World.states[u.state].name + '轉為「' + w.name + '」：' + w.desc, w.farm && w.time <= 1.07 ? 'info' : 'warn');
+        G._wn = w.name;
+      }
+    }
     for (const p of P) {
+      const wm = G._wm ? G._wm[p.state] : 1;
       for (const r of CFG.RES) {
-        if (p.res[r] < p.cap) p.res[r] = Math.min(p.cap, p.res[r] + p.prod[r] / 60);
+        if (p.res[r] < p.cap) p.res[r] = Math.min(p.cap, p.res[r] + p.prod[r] * wm / 60);
       }
       p.copper += p.prod.copper / 60;
       if (p.captor >= 0) {
@@ -1601,6 +1698,7 @@ var Game = (function () {
     if (data.v !== 2 && data.v !== 3) throw new Error('舊版存檔不相容');
     skOf = data.v === 2 ? legacySk : (s => (s && SKILLS[s]) ? s : null);
     World.generate(data.G.seed, data.G.mapN || CFG.MAP_N, data.G.genVer || 1);
+    Weather.setSeed(data.G.seed ^ 0x2545f491);
     T = World.T;
     const N = World.N;
     // 城池：NPC 城池由種子重建（順序一致），主城與要塞重新套用
@@ -1688,7 +1786,7 @@ var Game = (function () {
     // 資源建築
     canAfford, pay, gain, recompute, upgradeBuilding, mainCityMaxDur, allianceBonus,
     // 地圖
-    tileOwner, tileAlliance, isFriendly, adjFriendly, attackBlock, setOwner, abandon, buildFort, cityLockedDay, baseValid,
+    weatherAt, effLvl, exchangeHonor, honorOf, HONOR_PRICE, YELLOW, tileOwner, tileAlliance, isFriendly, adjFriendly, attackBlock, setOwner, abandon, buildFort, cityLockedDay, baseValid,
     buildCamp, buildBranch, canBranch, relocate, canRelocate, isHome, farmYield, outpostCount,
     // 行軍
     send, recall, marchPos, marchTime, marchMorale, startReturn,

@@ -473,10 +473,31 @@ var Render = (function () {
       const [wx, wy] = toScreen(World.X(q.cityTile) + 0.5, World.Y(q.cityTile) + 0.5);
       if (onScreen(wx, wy, 60)) drawWanted(wx, wy, hw, hh, tw);
     }
+    // 黃巾軍營寨：黃色脈動菱形與旗幟
+    if (Game.G.yellow) {
+      for (const k in Game.G.yellow.camps) {
+        const t = +k;
+        const [yx, yy] = toScreen(World.X(t) + 0.5, World.Y(t) + 0.5);
+        if (!onScreen(yx, yy, 40)) continue;
+        drawYellow(yx, yy, hw, hh, tw);
+      }
+    }
   }
   function roundRect(c, x, y, w, h, r) {
     c.beginPath(); c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r); c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
     c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r); c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath();
+  }
+  function drawYellow(sx, sy, hw, hh, tw) {
+    const pulse = 1 + Math.sin(performance.now() / 300) * 0.06;
+    ctx.save();
+    diamond(ctx, sx, sy, hw * pulse, hh * pulse);
+    ctx.fillStyle = 'rgba(240,200,40,0.28)'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#f2c230'; ctx.stroke();
+    const fs = Math.max(11, Math.min(20, tw * 0.5));
+    ctx.font = 'bold ' + fs + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff3a0'; ctx.fillText('⚑', sx, sy - hh * 0.3);
+    if (tw >= 14) { ctx.font = 'bold 11px "Noto Serif TC", serif'; ctx.fillStyle = '#ffd84a'; ctx.fillText('黃巾', sx, sy - hh - 6); }
+    ctx.restore();
   }
   // 通緝中的劫掠客：主城上方紅色脈動圓圈與骷髏，任何縮放都看得到
   function drawWanted(sx, sy, hw, hh, tw) {

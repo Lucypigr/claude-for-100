@@ -9,6 +9,7 @@ var AI = (function () {
     veteran: { label: '老手', skill: [0.75, 0.97], act: [2, 5], aggr: [0.45, 0.9], gold: [600, 3500], daily: [100, 400], chat: 0.7 },
     whale: { label: '課長', skill: [0.45, 0.9], act: [2, 6], aggr: [0.55, 1.0], gold: [18000, 50000], daily: [2500, 7000], chat: 1.0 },
   };
+  const RAID_NAMES = ['劫火', '黑旗', '血狼', '鬼影', '屠城', '夜梟', '斷刃', '餓狼', '焚天', '裂空', '蝗群', '修羅'];
   const MIX = [['newbie', 30], ['casual', 25], ['regular', 45], ['veteran', 30], ['whale', 20]];
   // 土地守軍「50%勝率」所需戰力倍數（由離線模擬校準）
   let GP = null, CP = null;
@@ -46,16 +47,19 @@ var AI = (function () {
     }).map(assignPersonaInit(n));
   }
   // 個性（與技術類型無關）：梟雄、好戰者、叛徒、火爆鄰居、龜縮
+  const RAIDER_RATE = 0.08; // 劫掠客占全服比例
   const PERSONA = {
     overlord: { label: '梟雄' }, warmonger: { label: '好戰者' }, traitor: { label: '叛徒' },
-    hothead: { label: '火爆' }, turtle: { label: '龜縮' }, normal: { label: '一般' },
+    hothead: { label: '火爆' }, turtle: { label: '龜縮' }, raider: { label: '劫掠客' }, normal: { label: '一般' },
   };
   function assignPersonaInit(n) {
-    const quota = { overlord: Math.max(1, Math.round(n / 75)), warmonger: Math.max(2, Math.round(n / 25)), traitor: Math.max(2, Math.round(n / 30)) };
-    const used = { overlord: 0, warmonger: 0, traitor: 0 };
+    const quota = { overlord: Math.max(1, Math.round(n / 75)), raider: Math.max(1, Math.round(n * RAIDER_RATE)), warmonger: Math.max(2, Math.round(n / 25)), traitor: Math.max(2, Math.round(n / 30)) };
+    const used = { overlord: 0, raider: 0, warmonger: 0, traitor: 0 };
     return pr => {
       const t = pr.type;
       if (used.overlord < quota.overlord && (t === 'whale' || t === 'veteran')) { used.overlord++; return setPersona(pr, 'overlord'); }
+      // 劫掠客：約 8% 的主公，多半是高手（課長、老手，其次是普通玩家）
+      if (used.raider < quota.raider && (t === 'whale' || t === 'veteran' || (t === 'regular' && U.rnd() < 0.5))) { used.raider++; return setPersona(pr, 'raider'); }
       if (used.warmonger < quota.warmonger && t !== 'newbie' && t !== 'casual') { used.warmonger++; return setPersona(pr, 'warmonger'); }
       if (used.traitor < quota.traitor && t !== 'newbie') { used.traitor++; return setPersona(pr, 'traitor'); }
       const r = U.rnd();
@@ -68,6 +72,7 @@ var AI = (function () {
     pr.persona = k;
     if (k === 'overlord') { pr.skill = Math.max(pr.skill, 0.95); pr.aggr = Math.max(pr.aggr, 0.8); pr.gold += 20000; pr.daily = Math.max(pr.daily, 3000); pr.act = Math.min(pr.act, 3); pr.chat = Math.max(pr.chat, 0.9); }
     if (k === 'warmonger') { pr.aggr = 1; pr.skill = Math.max(pr.skill, 0.7); pr.chat = Math.max(pr.chat, 0.9); }
+    if (k === 'raider') { pr.aggr = 1; pr.skill = Math.max(pr.skill, 0.82); pr.act = Math.min(pr.act, 4); pr.chat = Math.max(pr.chat, 0.9); pr.gold += 3000; pr.daily = Math.max(pr.daily, 400); pr.loyalty = 0.1; }
     if (k === 'traitor') { pr.loyalty = 0; }
     if (k === 'hothead') { pr.aggr = Math.max(pr.aggr, 0.65); pr.chat = Math.max(pr.chat, 0.8); }
     if (k === 'turtle') { pr.aggr = 0.02; }
@@ -126,14 +131,19 @@ var AI = (function () {
     const byState = {};
     for (const p of P) { if (!p.ai) continue; (byState[p.state] = byState[p.state] || []).push(p); }
     for (const st in byState) {
-      const arr = byState[st].filter(p => p.prof.type === 'whale' || p.prof.type === 'veteran')
+      const arr = byState[st].filter(p => persona(p) !== 'raider' && (p.prof.type === 'whale' || p.prof.type === 'veteran'))
         .sort((a, b) => (b.prof.skill + (b.prof.type === 'whale' ? 0.3 : 0)) - (a.prof.skill + (a.prof.type === 'whale' ? 0.3 : 0)));
       if (arr.length) { arr[0].prof.leader = true; mem(arr[0]).createAt = U.rint(20, 240); }
     }
     // 梟雄一定自立門戶，而且很早開盟
     for (const p of P) if (p.ai && persona(p) === 'overlord') { p.prof.leader = true; mem(p).createAt = U.rint(10, 90); }
+    // 劫掠客人數多了就會結成同盟：每約 10 位劫掠客推出一位盟主，第 1.5~3 天開盟，之後其他劫掠客陸續加入
+    const raiders = P.filter(p => p.ai && persona(p) === 'raider').sort((a, b) => b.prof.skill - a.prof.skill);
+    const raidLeaders = raiders.slice(0, Math.max(1, Math.round(raiders.length / 10)));
+    for (const p of raidLeaders) { p.prof.leader = true; mem(p).createAt = U.rint(1440 * 1.5, 1440 * 3); mem(p).raidLeader = true; }
+    for (const p of raiders) mem(p).joinAt = U.rint(1440 * 2, 1440 * 3.5);
     // 額外幾位想自立門戶的玩家
-    const extra = U.shuffle(P.filter(p => p.ai && !p.prof.leader && (p.prof.type === 'whale' || p.prof.type === 'veteran' || p.prof.type === 'regular'))).slice(0, 3);
+    const extra = U.shuffle(P.filter(p => p.ai && !p.prof.leader && persona(p) !== 'raider' && (p.prof.type === 'whale' || p.prof.type === 'veteran' || p.prof.type === 'regular'))).slice(0, 3);
     for (const p of extra) { p.prof.leader = true; mem(p).createAt = U.rint(200, 900); }
   }
 
@@ -171,20 +181,27 @@ var AI = (function () {
     if (p.prof.leader && m.createAt !== undefined && g.time >= m.createAt) {
       const used = new Set(g.alliances.map(a => a.name));
       if (p.copper < CFG.ALLIANCE_CREATE_COST.copper) p.copper = CFG.ALLIANCE_CREATE_COST.copper; // 盟主會存錢
-      const r = Game.createAlliance(p, U.allianceName(used));
+      const raid = !!m.raidLeader;
+      let nm = null;
+      if (raid) for (let k = 0; k < 30 && !nm; k++) { const c = U.pick(RAID_NAMES) + U.pick(['盟', '會', '軍', '堂', '幫', '']); if (!used.has(c)) { used.add(c); nm = c; } }
+      const r = Game.createAlliance(p, nm || U.allianceName(used));
       if (r.ok) {
         delete m.createAt;
-        Game.say(p, 'world', U.pick(CHAT.recruit).replace('{a}', r.alliance.name).replace('{s}', World.states[p.state].name));
+        if (raid) {
+          r.alliance.raid = true;
+          Game.say(p, 'world', U.pick(CHAT.raiderRecruit).replace('{a}', r.alliance.name));
+        } else Game.say(p, 'world', U.pick(CHAT.recruit).replace('{a}', r.alliance.name).replace('{s}', World.states[p.state].name));
       }
       return;
     }
     if (p.prof.leader && m.createAt !== undefined) return; // 盟主不加入他盟
     if (g.time < m.joinAt) return;
-    const cands = g.alliances.filter(a => !a.dead && a.members.length < CFG.ALLIANCE_MAX && a.open !== false);
+    const isRaider = persona(p) === 'raider';
+    const cands = g.alliances.filter(a => !a.dead && a.members.length < CFG.ALLIANCE_MAX && a.open !== false && (!isRaider || a.raid));
     if (!cands.length) return;
     const best = U.weighted(cands, a => {
       const same = a.members.filter(id => Game.P[id].state === p.state).length;
-      return (same * 4 + 1) * (1 + a.power / 50000) * (a.state === p.state ? 3 : 0.3) * (a.members.length > 32 ? 0.3 : 1);
+      return (same * 4 + 1) * (1 + a.power / 50000) * (a.state === p.state ? 3 : 0.3) * (a.members.length > 32 ? 0.3 : 1) * (a.raid && !isRaider ? 0.03 : 1) * (isRaider ? 3 : 1);
     });
     if (best) {
       Game.joinAlliance(p, best.id);
@@ -461,28 +478,63 @@ var AI = (function () {
     return v;
   }
   // 前線據點：老手蓋要塞，其他人蓋便宜的營帳
+  // 前線據點的目標：同盟目標城池 > 劫掠客鎖定的受害者主城 > 單打獨鬥時附近最近的關口/城池
+  function fortObjective(p, m) {
+    const g = G();
+    if (p.alliance >= 0) {
+      const a = g.alliances[p.alliance];
+      if (a.target >= 0 && a.field) { const c = World.cities[a.target]; return { x: c.cx, y: c.cy, name: c.name }; }
+    }
+    if (isRaider(p) && m.victim >= 0 && g.time <= m.victimUntil) {
+      const op = Game.P[m.victim];
+      if (op) return { x: World.X(op.cityTile), y: World.Y(op.cityTile), name: op.name + ' 的主城' };
+    }
+    if (p.prof.skill < 0.7) return null; // 單打獨鬥只有高手才會先蓋前哨
+    if (g.time >= (m.nextGoal || 0)) {
+      m.nextGoal = g.time + U.rint(240, 480);
+      m.goal = null;
+      const mx = World.X(p.cityTile), my = World.Y(p.cityTile);
+      let best = null, bd = 1e9;
+      for (const c of World.cities) {
+        if (World.isPlayerCity(c) || c.dead || c.type === 'luoyang') continue;
+        if (c.alliance >= 0 && (c.alliance === p.alliance || sameBloc(c.alliance, p.alliance))) continue;
+        if (Game.cityLockedDay(c) > Game.day()) continue;
+        const d = Math.hypot(c.cx - mx, c.cy - my);
+        if (d < 22 || d > 55 * MS() || d >= bd) continue;
+        bd = d; best = c;
+      }
+      if (best) m.goal = { x: best.cx, y: best.cy, name: best.name };
+    }
+    return m.goal || null;
+  }
+  // 打關口或城池前，若距離遠就先在最靠近目標的己方土地蓋要塞/營帳：真的能縮短行軍時間才蓋
   function manageFort(p) {
     const pr = p.prof;
-    if (pr.skill < 0.3 || p.alliance < 0) return;
+    if (pr.skill < 0.3) return;
     const m = mem(p);
     if (G().time < (m.nextFort || 0)) return;
-    m.nextFort = G().time + U.rint(90, 240);
-    const a = Game.G.alliances[p.alliance];
-    if (a.target < 0 || !a.field) return;
-    const city = World.cities[a.target];
-    const dMain = Math.hypot(city.cx - World.X(p.cityTile), city.cy - World.Y(p.cityTile));
-    if (dMain < 26) return;
-    // 目標附近已有自己的據點就不再蓋
-    for (const id of p.forts.concat(p.branches || [])) { const f = World.cities[id]; if (!f.dead && Math.hypot(city.cx - f.cx, city.cy - f.cy) < 14) return; }
+    m.nextFort = G().time + U.rint(90, 220);
+    const obj = fortObjective(p, m);
+    if (!obj) return;
+    const dMain = Math.hypot(obj.x - World.X(p.cityTile), obj.y - World.Y(p.cityTile));
+    if (dMain < 20) return;
+    // 目標附近已有自己的據點（含分城）就不再蓋；營帳到期拆除後會再補蓋
+    for (const id of p.forts.concat(p.branches || [])) { const f = World.cities[id]; if (!f.dead && Math.hypot(obj.x - f.cx, obj.y - f.cy) < 14) return; }
     let best = -1, bd = 1e9;
-    for (const i of p.lands) {
+    const lands = p.lands;
+    for (let k = 0; k < Math.min(500, lands.length); k++) {
+      const i = lands[lands.length > 500 ? (U.rnd() * lands.length) | 0 : k];
       if (Game.T.city[i] >= 0) continue;
-      const d = Math.hypot(city.cx - World.X(i), city.cy - World.Y(i));
+      const d = Math.hypot(obj.x - World.X(i), obj.y - World.Y(i));
       if (d < bd) { bd = d; best = i; }
     }
-    if (best < 0 || bd >= 12) return;
-    if (pr.skill >= 0.55 && Game.outpostCount(p, 'fort') < CFG.FORT_MAX && Game.canAfford(p, CFG.FORT_COST)) Game.buildFort(p, best);
-    else if (Game.canAfford(p, CFG.CAMP_COST)) Game.buildCamp(p, best);
+    if (best < 0) return;
+    const saved = dMain - bd; // 行軍距離縮短多少格
+    if (bd >= 14 || saved < 14 || saved < dMain * 0.35) return; // 己方土地要夠靠近目標，且真的省下夠多行軍距離
+    let ok = false;
+    if (pr.skill >= 0.55 && Game.outpostCount(p, 'fort') < CFG.FORT_MAX && Game.canAfford(p, CFG.FORT_COST)) ok = Game.buildFort(p, best).ok;
+    else if (Game.canAfford(p, CFG.CAMP_COST)) ok = Game.buildCamp(p, best).ok;
+    if (ok && U.chance(0.25 + pr.chat * 0.2)) later(p, p.alliance >= 0 && U.chance(0.6) ? 'ally' : 'world', U.pick(CHAT.fortBuilt).replace('{c}', obj.name), U.rint(1, 15));
   }
   // 分城：名望足夠的老手/課長，在靠近同盟目標（或離主城較遠）的 3×3 己方土地建分城
   function manageBranch(p) {
@@ -557,6 +609,8 @@ var AI = (function () {
       let pvpP = pr.aggr * (p.landCount >= p.landCap - 2 ? 1 : 0.6);
       if (activeFeud(p)) pvpP = Math.max(pvpP, 0.7);
       if (persona(p) === 'turtle') pvpP = 0;
+      if (persona(p) === 'raider') pvpP = 0.85;
+      else if (hunting(p)) pvpP = Math.max(pvpP, 0.7);
       if (target < 0 && U.rnd() < pvpP) target = pvpTarget(p, team, tp);
       // 3) 擴張
       if (target < 0) target = expandTarget(p, team, tp);
@@ -714,6 +768,9 @@ var AI = (function () {
     const g = G();
     const T = Game.T;
     const pr = p.prof;
+    // 劫掠客：鎖定弱小玩家持續欺負；被討伐的人則由討伐者圍攻
+    if (persona(p) === 'raider') { const t = raiderTarget(p, team, tp); if (t >= 0) return t; }
+    else { const t = hunterTarget(p, team, tp); if (t >= 0) return t; }
     // 仇人
     let foe = -1, ft = -1;
     for (const k in p.grudge) { if (g.time - p.grudge[k] < 720 && p.grudge[k] > ft) { ft = p.grudge[k]; foe = +k; } }
@@ -730,9 +787,12 @@ var AI = (function () {
       const enemyBest = bestTeamPower(op) * (op.teams.some(t => t.gtile === i) ? 1 : 0.15);
       const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L] + enemyBest * 0.9);
       const w = winP(perceived(p, ratio));
-      if (w < 0.55) continue;
-      let v = L * 60 + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 150 : 0) - World.dist(i, team.base) * 5;
-      if (op.power > p.power * 1.5 && o !== foe && persona(p) !== 'warmonger') v -= 200; // 不惹強者（好戰者例外）
+      const rd = persona(p) === 'raider' && (op.power < p.power * 0.7 || !op.ai || op.prof.type === 'newbie' || op.prof.type === 'casual');
+      if (w < (rd ? 0.45 : 0.55)) continue;
+      // 趁火打劫：對方剛被打、或正被別人圍攻時更容易成為目標
+      const hot = (op.lastLoss > 0 && g.time - op.lastLoss < 120 ? 110 : 0) + (op.incoming > 0 && g.time - op.incoming < 30 ? 90 : 0);
+      let v = L * 60 + (rd ? 220 : 0) + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 260 : 0) + hot - World.dist(i, team.base) * 5;
+      if (op.power > p.power * 1.5 && o !== foe && persona(p) !== 'warmonger' && persona(p) !== 'raider') v -= 200; // 不惹強者（好戰者例外）
       if (p.landCount >= p.landCap && L < 5) continue;
       if (v > bs) { bs = v; best = i; }
     }
@@ -879,7 +939,7 @@ var AI = (function () {
   }
   function alliancesThink(now) {
     const g = G();
-    if (now !== undefined && now % 60 === 17) feudTick();
+    if (now !== undefined && now % 60 === 17) { feudTick(); raidTick(); }
     for (const a of g.alliances) {
       if (a.dead) continue;
       if (now !== undefined && (now + a.id * 7) % 30 !== 0) continue; // 各同盟錯開思考，避免卡頓
@@ -962,8 +1022,14 @@ var AI = (function () {
       const garr = CFG.CITY_GARRISON[c.lvl];
       const need = c.alliance < 0 ? CP[c.lvl] * garr[0] * 0.9 : (Game.G.alliances[c.alliance].power / 60);
       if (str < need * (0.55 + leader.prof.skill * 0.3)) continue;
-      const pts = (CFG.CITY_POINTS[c.type] || 5) + (c.type === 'pass' ? 25 : 0) + (c.type === 'luoyang' ? 1000 : 0);
-      cands.push({ c, score: pts * 3 - d * 1.2 - (c.alliance >= 0 ? 30 : 0) + U.rnd() * 15 });
+      let pts = (CFG.CITY_POINTS[c.type] || 5) + (c.type === 'pass' ? 25 : 0) + (c.type === 'luoyang' ? 1000 : 0);
+      let bonus = 0;
+      if (a.raid) {
+        // 劫掠同盟：搶先佔據關口，卡住別人的進軍路線；盟友弱小的城池也優先欺負
+        if (c.type === 'pass') bonus += 160;
+        if (c.alliance >= 0 && Game.G.alliances[c.alliance].power < a.power * 0.6) bonus += 40;
+      }
+      cands.push({ c, score: pts * 3 - d * 1.2 - (c.alliance >= 0 && !a.raid ? 30 : 0) + bonus + U.rnd() * 15 });
     }
     cands.sort((x, y) => y.score - x.score);
     for (const { c } of cands.slice(0, 6)) {
@@ -1083,10 +1149,13 @@ var AI = (function () {
   }
 
   // ================= 事件回呼 =================
+  // 領地或主城遭到進攻：本人召回部隊（僅主城）、盟友出兵駐守，還會「圍魏救趙」反攻進攻者附近的土地，
+  // 讓同一區域同時出現多方部隊互相攻擊的混戰
   function onThreat(p, attacker, tile, march) {
-    const pr = p.prof;
+    const g = G();
+    const pr = p.prof || { skill: 0.5, chat: 0.5 };
     const isMain = Game.T.city[tile] >= 0 && World.cities[Game.T.city[tile]].type === 'main';
-    if (isMain) {
+    if (p.ai && isMain) {
       if (U.rnd() < pr.skill) {
         // 召回附近部隊守城
         for (const t of p.teams) {
@@ -1096,31 +1165,63 @@ var AI = (function () {
           }
         }
       }
-      if (p.alliance >= 0 && U.rnd() < pr.chat + 0.3) later(p, 'ally', U.pick(CHAT.help).replace('{n}', attacker.name).replace('{xy}', '(' + World.X(tile) + ',' + World.Y(tile) + ')'), U.rint(0, 3));
-      // 盟友支援駐守
-      if (p.alliance >= 0) {
-        const a = Game.G.alliances[p.alliance];
-        let sent = 0;
-        for (const id of a.members) {
-          if (sent >= 2) break;
-          const q = Game.P[id];
-          if (!q.ai || q === p || U.rnd() > q.prof.skill * 0.7) continue;
-          for (const t of q.teams) {
-            if (!Game.teamReady(q, t, CFG.COST_GARRISON)) continue;
-            const eta = Game.marchTime(q, t, t.base, tile);
-            if (G().time + eta >= march.end) continue;
-            const r = Game.send(q, t.id, tile, 'garrison');
-            if (r.ok) { sent++; later(q, 'ally', U.pick(CHAT.support).replace('{n}', p.name), U.rint(0, 2)); break; }
-          }
+    }
+    if (p.alliance < 0) return;
+    const xy = '(' + World.X(tile) + ',' + World.Y(tile) + ')';
+    if (p.ai && isMain && U.rnd() < pr.chat + 0.3) later(p, 'ally', U.pick(CHAT.help).replace('{n}', attacker.name).replace('{xy}', xy), U.rint(0, 3));
+    const a = g.alliances[p.alliance];
+    let sent = 0, struck = 0;
+    for (const id of a.members) {
+      if (sent >= 2 && struck >= 2) break;
+      const q = Game.P[id];
+      if (!q.ai || q === p || (q.aiMem && g.time - (q.aiMem.lastAssist || -999) < 15)) continue;
+      const sk = q.prof.skill;
+      // 1) 出兵駐守受襲的領地（主城更積極）
+      if (sent < 2 && U.rnd() < sk * (isMain ? 0.7 : 0.45)) {
+        for (const t of q.teams) {
+          if (!Game.teamReady(q, t, CFG.COST_GARRISON)) continue;
+          const eta = Game.marchTime(q, t, t.base, tile);
+          if (G().time + eta >= march.end) continue;
+          const r = Game.send(q, t.id, tile, 'garrison');
+          if (r.ok) { sent++; mem(q).lastAssist = g.time; if (isMain || U.chance(0.3)) later(q, 'ally', U.pick(CHAT.support).replace('{n}', p.name), U.rint(0, 2)); break; }
         }
       }
+      // 2) 圍魏救趙：反攻進攻者在附近的土地（侵略性高的盟友）
+      if (struck < 2 && U.rnd() < q.prof.aggr * sk * 0.6 && attacker.landCount > 0) {
+        if (counterStrike(q, attacker, tile)) { struck++; mem(q).lastAssist = g.time; if (U.chance(0.25)) later(q, 'ally', U.pick(CHAT.counter).replace('{n}', attacker.name), U.rint(0, 3)); }
+      }
     }
+  }
+  function counterStrike(q, attacker, tile) {
+    const T = Game.T;
+    let best = -1, bd = 1e9;
+    const lands = attacker.lands;
+    for (let k = 0; k < Math.min(120, lands.length); k++) {
+      const i = lands[lands.length > 120 ? (U.rnd() * lands.length) | 0 : k];
+      if (T.city[i] >= 0) continue;
+      const d = World.dist(i, tile);
+      if (d < bd && d <= 16) { bd = d; best = i; }
+    }
+    if (best < 0 || Game.attackBlock(q, best)) return false;
+    drawNoise(q);
+    for (const t of q.teams) {
+      if (!Game.teamReady(q, t, CFG.COST_ATTACK) || t.status !== 'idle') continue;
+      const cap = Game.teamCapTroops(q, t);
+      if (!cap || Game.teamTroops(q, t) / cap < 0.5) continue;
+      const L = T.lvl[best];
+      const tp = Game.teamPower(q, t);
+      if (winP(perceived(q, mtp(q, t, tp, best) / (GP[L] * R50[L]) * 0.7)) < 0.5) continue;
+      if (Game.send(q, t.id, best, 'attack').ok) return true;
+    }
+    return false;
   }
   function onAttacked(p, attacker, tile, winner) {
     p.grudge[attacker.id] = G().time;
   }
   function onLandLost(p, attacker, tile) {
     p.grudge[attacker.id] = G().time;
+    raidEvent(attacker, p, 'land');
+    if (!p.ai) return;
     const m = mem(p);
     if (G().time - m.lastChat > 60 && U.rnd() < p.prof.chat * 0.5) {
       m.lastChat = G().time;
@@ -1130,7 +1231,9 @@ var AI = (function () {
   }
   function onCaptured(p, attacker) {
     p.grudge[attacker.id] = G().time;
-    if (U.rnd() < 0.8) later(p, 'world', U.pick(CHAT.captured).replace('{n}', attacker.name), U.rint(1, 12));
+    raidEvent(attacker, p, 'capture');
+    if (p.ai && isRaider(attacker) && U.chance(0.5)) later(attacker, 'world', U.pick(CHAT.raiderBoast).replace('{n}', p.name), U.rint(1, 10));
+    if (p.ai && U.rnd() < 0.8) later(p, 'world', U.pick(CHAT.captured).replace('{n}', attacker.name), U.rint(1, 12));
   }
   function onBattleResult(p, team, tile, won) {
     const m = mem(p);
@@ -1147,6 +1250,11 @@ var AI = (function () {
       if (a.target === city.id) { a.target = -1; a.field = null; a.pave = null; a.phase = ''; }
     }
     const a = g.alliances[aid];
+    if (a && a.raid && city.type === 'pass') {
+      for (const id of a.members) { const q = Game.P[id]; if (isRaider(q)) raidMem(q).passes++; }
+      const L = Game.P[a.leader];
+      if (L && L.ai) later(L, 'world', U.pick(CHAT.raiderPass).replace('{c}', city.name), U.rint(1, 6));
+    }
     if (a) {
       const m = Game.P[U.pick(a.members)];
       if (m && m.ai) later(m, 'ally', U.pick(CHAT.cheer), U.rint(1, 5));
@@ -1168,7 +1276,7 @@ var AI = (function () {
     // 小盟盟主解散投靠大盟
     if (p.alliance >= 0) {
       const a = G().alliances[p.alliance];
-      if (a.leader === p.id && a.members.length < 3 && Game.day() >= 2 && a.cities.length === 0) {
+      if (a.leader === p.id && a.members.length < 3 && Game.day() >= 2 && a.cities.length === 0 && !a.raid) {
         p.prof.leader = false;
         delete mem(p).createAt;
         Game.leaveAlliance(p);
@@ -1179,11 +1287,161 @@ var AI = (function () {
     // 弱盟成員跳槽
     if (p.alliance >= 0) {
       const a = G().alliances[p.alliance];
-      if (a.members.length < 5 && a.leader !== p.id && !userLed(a) && G().time > 4 * 1440 && U.rnd() < 0.3 * (1 - pr.loyalty)) {
+      if (a.members.length < 5 && a.leader !== p.id && !userLed(a) && !a.raid && G().time > 4 * 1440 && U.rnd() < 0.3 * (1 - pr.loyalty)) {
         Game.leaveAlliance(p);
         mem(p).joinAt = G().time + U.rint(10, 120);
       }
     }
+  }
+
+  // ================= 劫掠客 =================
+  // 劫掠客：天生惡劣的高手，鎖定新手與弱小玩家不斷奪地、攻陷主城；人多了結成劫掠同盟，搶先佔據關口。
+  // 被欺負的玩家與旁觀者會在世界頻道指認他們，嚴重程度越高，越容易引來全服討伐。
+  function raidMem(p) {
+    const m = mem(p);
+    if (!m.raid) m.raid = { hits: 0, caps: 0, vic: {}, passes: 0, sev: 0, flag: false, lastCall: -9999, lastHunt: -9999 };
+    return m.raid;
+  }
+  function isRaider(p) { return !!p && p.ai && persona(p) === 'raider'; }
+  function weakPlayer(attacker, q) {
+    return !q.ai || q.power < attacker.power * 0.7 || q.prof.type === 'newbie' || q.prof.type === 'casual';
+  }
+  // 鎖定一位值得欺負的弱者：附近、戰力低、沒有靠山（沒盟更好）；新手優先
+  function pickVictim(p) {
+    const g = G();
+    const my = raidMem(p);
+    let best = null, bs = -1e9;
+    for (const q of Game.P) {
+      if (q === p || q.captor === p.id || g.time < q.protectEnd) continue;
+      if (isRaider(q) || (p.alliance >= 0 && sameBloc(q.alliance, p.alliance))) continue;
+      const d = World.dist(q.cityTile, p.cityTile);
+      if (d > 40 * MS()) continue;
+      if (q.power > p.power * 0.8) continue;
+      let v = -d * 0.6 + (1 - q.power / Math.max(1, p.power)) * 80 + (q.alliance < 0 ? 30 : 0);
+      if (q.ai && q.prof.type === 'newbie') v += 60; else if (q.ai && q.prof.type === 'casual') v += 35;
+      if (my.vic[q.id]) v += 25; // 老對象繼續欺負
+      if (v > bs) { bs = v; best = q; }
+    }
+    return best;
+  }
+  // 對指定玩家施壓：能攻就打主城，否則「拔點」推進到其主城下（劫掠客與討伐者共用）
+  function siegeOn(p, team, tp, op, maxD, cityRatio) {
+    const T = Game.T;
+    const ct = op.cityTile;
+    if (op.captor !== p.id && G().time >= op.protectEnd && bestTeamPower(op) < tp * cityRatio && !Game.attackBlock(p, ct)) return ct;
+    let best = -1, bd = 1e9;
+    for (const i of frontier(p, 50)) {
+      const d = World.dist(i, ct);
+      if (d >= bd || d > maxD) continue;
+      const L = T.lvl[i];
+      const o = T.owner[i];
+      if (o >= 0 && o !== op.id && Game.P[o].alliance >= 0 && sameBloc(Game.P[o].alliance, p.alliance)) continue;
+      if (winP(perceived(p, mtp(p, team, tp, i) / (GP[L] * R50[L]) * (o >= 0 ? 0.7 : 1))) < 0.45) continue;
+      if (Game.attackBlock(p, i)) continue;
+      bd = d; best = i;
+    }
+    return best;
+  }
+  function raiderTarget(p, team, tp) {
+    const g = G(), m = mem(p);
+    let op = m.victim >= 0 && m.victim !== undefined ? Game.P[m.victim] : null;
+    if (op && (g.time > m.victimUntil || (p.alliance >= 0 && sameBloc(op.alliance, p.alliance)))) { op = null; m.victim = -1; }
+    if (!op && g.time >= (m.nextVictim || 0)) {
+      m.nextVictim = g.time + U.rint(20, 60);
+      op = pickVictim(p);
+      if (op) {
+        m.victim = op.id; m.victimUntil = g.time + U.rint(1440, 2880);
+        p.grudge[op.id] = g.time;
+        if (U.chance(0.4)) later(p, 'world', U.pick(CHAT.raiderTaunt).replace('{n}', op.name), U.rint(0, 8));
+      }
+    }
+    if (!op) return -1;
+    return siegeOn(p, team, tp, op, 20 * MS(), 1.1);
+  }
+  function hunting(p) { const h = mem(p).hunt; return !!h && G().time < h.until; }
+  // 討伐令：參加的人圍攻被通緝的劫掠客
+  function hunterTarget(p, team, tp) {
+    const h = mem(p).hunt;
+    if (!h || G().time >= h.until) return -1;
+    const op = Game.P[h.id];
+    if (!op || op.captor >= 0) return -1;
+    if (op.alliance >= 0 && p.alliance >= 0 && sameBloc(op.alliance, p.alliance)) return -1;
+    return siegeOn(p, team, tp, op, 24 * MS(), 1.3);
+  }
+  function raidEvent(att, victim, kind) {
+    if (!isRaider(att)) return;
+    const g = G();
+    const r = raidMem(att);
+    r.hits += weakPlayer(att, victim) ? 1 : 0.4;
+    if (kind === 'capture') r.caps++;
+    r.vic[victim.id] = 1;
+    r.sev = Math.min(1, r.hits * 0.006 + r.caps * 0.08 + Object.keys(r.vic).length * 0.02 + r.passes * 0.08);
+    if (!weakPlayer(att, victim)) return;
+    // 受害者（或附近的旁觀者）發現並指認
+    let witness = victim.ai ? victim : null;
+    if (!witness) {
+      const near = Game.P.filter(q => q.ai && q !== att && !isRaider(q) && World.dist(q.cityTile, victim.cityTile) < 30 * MS());
+      witness = near.length ? U.pick(near) : null;
+      Game.notify(victim.id, '【' + att.name + '】專門欺負弱小玩家，小心被劫掠！', 'bad');
+    }
+    if (!witness) return;
+    const cool = r.flag ? 360 : 90;
+    if (g.time - r.lastCall < cool) return;
+    const pCall = (0.015 + 0.5 * r.sev) * (0.5 + 0.5 * (witness.prof ? witness.prof.chat : 0.5)) * (kind === 'capture' ? 2 : 1);
+    if (U.rnd() > pCall) return;
+    r.lastCall = g.time;
+    const k = Object.keys(r.vic).length;
+    if (!r.flag) {
+      r.flag = true;
+      att.title = '劫掠客';
+      later(witness, 'world', U.pick(CHAT.raiderExpose).replace('{n}', att.name).replace('{k}', k), U.rint(0, 3));
+      Game.sys('world', '【通緝】' + att.name + ' 被指認為劫掠客！專門欺負新手與弱小玩家');
+    } else later(witness, 'world', U.pick(CHAT.raiderCallout).replace('{n}', att.name).replace('{k}', k), U.rint(0, 3));
+    // 嚴重程度越高，越容易引來全服討伐
+    const active = (g.hunts || []).some(h => !h.over && h.id === att.id);
+    if (!active && g.time - r.lastHunt > 1440 && U.rnd() < 0.1 + 0.6 * r.sev) startHunt(att, witness);
+  }
+  function startHunt(att, caller) {
+    const g = G();
+    const r = raidMem(att);
+    r.lastHunt = g.time;
+    if (!g.hunts) g.hunts = [];
+    g.hunts.push({ id: att.id, since: g.time, until: g.time + 2880, sev: r.sev, over: false });
+    Game.sys('world', '【討伐令】全服討伐劫掠客 ' + att.name + '！' + (att.alliance >= 0 ? '〔' + g.alliances[att.alliance].name + '〕' : ''));
+    if (caller && caller.ai) later(caller, 'world', U.pick(CHAT.huntDeclare).replace('{n}', att.name), U.rint(1, 6));
+    let joined = 0, shouted = 0;
+    for (const q of Game.P) {
+      if (!q.ai || q === att || isRaider(q) || q.captor >= 0) continue;
+      if (att.alliance >= 0 && q.alliance === att.alliance) continue;
+      let pj = (0.15 + 0.6 * r.sev) * (0.5 + 0.5 * q.prof.skill);
+      if (World.dist(q.cityTile, att.cityTile) > 90 * MS()) pj *= 0.4;
+      if (persona(q) === 'turtle') pj *= 0.3;
+      if (U.rnd() > pj) continue;
+      mem(q).hunt = { id: att.id, until: g.time + 2880 };
+      q.grudge[att.id] = g.time;
+      joined++;
+      if (shouted < 3 && U.chance(0.15)) { shouted++; later(q, 'world', U.pick(CHAT.huntJoin).replace('{n}', att.name), U.rint(2, 30)); }
+    }
+    if (isRaider(att) && U.chance(0.7)) later(att, 'world', U.pick(CHAT.raiderHunted), U.rint(3, 20));
+    const u = Game.P[g.userId];
+    if (u) Game.notify(u.id, '【討伐令】劫掠客 ' + att.name + ' 遭到通緝，已有 ' + joined + ' 位主公響應討伐', 'info');
+  }
+  function raidTick() {
+    const g = G();
+    for (const h of g.hunts || []) {
+      if (h.over) continue;
+      const att = Game.P[h.id];
+      if (!att || g.time > h.until) { h.over = true; continue; }
+      if (att.captor >= 0) {
+        h.over = true;
+        const c = Game.P[att.captor];
+        Game.sys('world', '【討伐成功】劫掠客 ' + att.name + ' 的主城被 ' + (c ? c.name : '義軍') + ' 攻陷！');
+        if (c && c.ai) later(c, 'world', U.pick(CHAT.huntWin).replace('{n}', att.name), U.rint(1, 8));
+        const r = raidMem(att);
+        r.hits *= 0.5; r.sev = Math.max(0, r.sev - 0.2); // 吃了教訓，氣焰收斂一些
+      }
+    }
+    if ((g.hunts || []).length > 60) g.hunts = g.hunts.filter(h => !h.over);
   }
 
   // ================= 個性行為 =================
@@ -1210,6 +1468,7 @@ var AI = (function () {
     if (k === 'overlord') subjugate(p);
     if (k === 'turtle' && U.rnd() < 0.08 * p.prof.chat) later(p, 'world', U.pick(CHAT.turtle), U.rint(1, 20));
     if (k === 'warmonger' && U.rnd() < 0.12) later(p, 'world', U.pick(CHAT.warmonger), U.rint(1, 20));
+    if (k === 'raider' && U.rnd() < 0.1) later(p, 'world', U.pick(CHAT.raiderIdle), U.rint(1, 20));
   }
   // 火爆鄰居 / 好戰者：挑一位鄰居結仇，在世界頻道嗆聲
   function startFeud(p) {

@@ -626,6 +626,8 @@ var UI = (function () {
         teamPick = null; refreshPanel(); break;
       }
       case 'unslot': { const r = Game.setSlot(user, teamPick.ti, teamPick.slot, 0); if (!r.ok) toast(r.msg, 'warn'); teamPick = null; refreshPanel(); break; }
+      case 'poolinfo': panelArg = panelArg && panelArg.pool === d.pack ? null : { pool: d.pack, star: 5 }; refreshPanel(); break;
+      case 'poolstar': panelArg = { pool: panelArg.pool, star: +d.star }; refreshPanel(); break;
       case 'pfilter': {
         const k = d.k, v = d.v;
         if (k === 'idle' || k === 'sta') pickFilter[k] = v === '1';
@@ -958,9 +960,10 @@ var UI = (function () {
     recruit() {
       let h = '<div class="packs">';
       for (const pk of CFG.PACKS.filter(x => !x.hidden)) {
-        h += '<div class="pack' + (pk.elite ? ' elite' : '') + '"><div class="pn">' + pk.name + '</div><div class="pr">' + pk.rates.map(([s, r]) => s + '★ ' + (r * 100).toFixed(1) + '%').join('　') + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>' + costHtml(pk.price) + '<br><button class="btn big ' + (pk.price.gold ? 'red' : '') + '" data-act="draw" data-pack="' + pk.key + '">招募' + (pk.count ? pk.count + '次' : '') + '</button></div>';
+        h += '<div class="pack' + (pk.elite ? ' elite' : '') + '"><div class="pn">' + pk.name + '</div><div class="pr">' + pk.rates.map(([s, r]) => s + '★ ' + (r * 100).toFixed(1) + '%').join('　') + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>' + costHtml(pk.price) + '<br><button class="btn big ' + (pk.price.gold ? 'red' : '') + '" data-act="draw" data-pack="' + pk.key + '">招募' + (pk.count ? pk.count + '次' : '') + '</button> <button class="btn small dark" data-act="poolinfo" data-pack="' + pk.key + '">卡池機率</button></div>';
       }
       h += '</div>';
+      if (panelArg && panelArg.pool) h += poolInfoHtml(panelArg.pool, panelArg.star);
       if (drawResult && drawResult.length > 5) {
         const cnt = {}; for (const x of drawResult) { const st = Game.tpl(x).star; cnt[st] = (cnt[st] || 0) + 1; }
         h += '<div class="sec-t">招募結果（共 ' + drawResult.length + ' 名）</div><div class="muted">' + [5, 4, 3, 2, 1].filter(st => cnt[st]).map(st => st + '★ ×' + cnt[st]).join('　') + '（依星級排序）</div>';
@@ -1266,6 +1269,42 @@ var UI = (function () {
     return { skills: r.skills.filter(id => id !== t.skill), why: r.why, web: r.web };
   }
 
+  // 卡池機率：各星級機率、該星級的武將清單與單一武將的機率（星級內平均抽出），含保底的實際期望
+  function poolInfoHtml(key, star) {
+    const pk = CFG.PACKS.find(x => x.key === key);
+    if (!pk) return '';
+    const byStar = {};
+    for (const t of HEROES) (byStar[t.star] = byStar[t.star] || []).push(t);
+    const rate = st => (pk.rates.find(r => r[0] === st) || [0, 0])[1];
+    let h = '<div class="sec-t">' + E(pk.name) + '　卡池機率</div>';
+    h += '<div class="muted" style="font-size:12px">價格：' + (pk.price.gold ? pk.price.gold + ' 金銖' : pk.price.copper + ' 銅幣') + (pk.count > 1 ? '，一次抽 ' + pk.count + ' 次' : '') + '。每次抽卡先依星級機率決定星級，再從該星級所有武將中平均抽出。' + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>';
+    if (pk.pity5) {
+      // 保底後的期望五星數：E[max(X, pity)]，X ~ Binomial(n, p)
+      const n = pk.count, p = rate(5);
+      let exp = 0, c = 1;
+      for (let k = 0; k <= n; k++) { if (k > 0) c = c * (n - k + 1) / k; exp += Math.max(k, pk.pity5) * c * Math.pow(p, k) * Math.pow(1 - p, n - k); }
+      h += '<div class="muted" style="font-size:12px">不含保底平均 ' + (n * p).toFixed(1) + ' 位五星；加上保底後平均約 <b class="good">' + exp.toFixed(1) + '</b> 位。</div>';
+    }
+    h += '<table class="tbl" style="margin:6px 0"><tr><th>星級</th><th>機率</th><th>武將數</th><th>單一武將機率</th>' + (pk.count > 1 ? '<th>' + pk.count + ' 抽平均</th>' : '') + '</tr>';
+    for (const st of [5, 4, 3, 2, 1]) {
+      const r = rate(st), n = (byStar[st] || []).length;
+      if (!r) continue;
+      h += '<tr><td>' + '★'.repeat(st) + '</td><td>' + (r * 100).toFixed(1) + '%</td><td>' + n + '</td><td>' + (n ? (r / n * 100).toFixed(3) : '0') + '%</td>' + (pk.count > 1 ? '<td>' + (r * pk.count).toFixed(1) + '</td>' : '') + '</tr>';
+    }
+    h += '</table>';
+    const stars = [5, 4, 3, 2, 1].filter(st => rate(st) > 0);
+    const cur = stars.includes(star) ? star : stars[0];
+    h += '<div class="filter">' + stars.map(st => '<button data-act="poolstar" data-star="' + st + '" class="' + (cur === st ? 'on' : '') + '">' + st + '★ 武將（' + (byStar[st] || []).length + '）</button>').join('') + '</div>';
+    const per = ((byStar[cur] || []).length ? rate(cur) / byStar[cur].length * 100 : 0).toFixed(3);
+    const order = ['漢', '魏', '蜀', '吳', '群'];
+    const list = (byStar[cur] || []).slice().sort((a, b) => order.indexOf(a.faction) - order.indexOf(b.faction) || a.id - b.id);
+    h += '<div class="muted" style="font-size:12px;margin-bottom:4px">每位 ' + per + '%　（你已擁有的標示張數）</div><div class="hist-list" style="max-height:240px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:4px">';
+    for (const t of list) {
+      const own = user.heroes.filter(x => x.t === t.id).length;
+      h += '<span style="border:1px solid ' + FACTION_COLOR[t.faction] + ';padding:1px 6px;font-size:12px;border-radius:3px" title="' + t.faction + '·' + t.troop + '兵 統御' + t.cost + '">' + E(t.name) + (own ? ' <b class="good">×' + own + '</b>' : '') + '</span>';
+    }
+    return h + '</div>';
+  }
   // 這個戰法可以分解（傳承）哪些武將取得：傳承戰法為此戰法、三星以上的武將；標示你擁有哪幾位
   function skillSourceHtml(sid) {
     const src = HEROES.filter(x => x.inherit === sid && x.star >= 3);

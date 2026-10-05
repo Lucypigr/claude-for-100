@@ -806,7 +806,7 @@ var Game = (function () {
         const tgtCity = T.city[target] >= 0 && World.cities[T.city[target]].type === 'main';
         if (o === G.userId) notify(o, (tgtCity ? '⚠ 主城' : '⚠ 領地') + '(' + World.X(target) + ',' + World.Y(target) + ') 即將遭到【' + p.name + '】攻擊！', 'bad');
         P[o].incoming = G.time;
-        if (P[o].ai) AI.onThreat(P[o], p, target, m);
+        AI.onThreat(P[o], p, target, m);
       }
     }
     return ok({ march: m });
@@ -1118,7 +1118,7 @@ var Game = (function () {
             const op = P[prev];
             op.lastLoss = G.time;
             if (prev === G.userId) notify(prev, '領地(' + World.X(i) + ',' + World.Y(i) + ') 被【' + p.name + '】奪走了！', 'bad');
-            if (op.ai) AI.onLandLost(op, p, i);
+            AI.onLandLost(op, p, i);
           }
         }
       } else {
@@ -1179,7 +1179,7 @@ var Game = (function () {
         recompute(o);
         sys('world', '【淪陷】' + (p.alliance >= 0 ? '〔' + G.alliances[p.alliance].name + '〕' : '') + p.name + ' 攻陷了 ' + o.name + ' 的主城！');
         if (o.id === G.userId) notify(o.id, '主城淪陷！你成為【' + p.name + '】的俘虜，將上繳 20% 資源 ' + CFG.CAPTURE_HOURS + ' 小時', 'bad');
-        if (o.ai) AI.onCaptured(o, p);
+        AI.onCaptured(o, p);
         return '攻陷主城！';
       }
       return '拆除耐久 ' + dmg + '（剩餘 ' + city.dur + '/' + city.maxDur + '）';

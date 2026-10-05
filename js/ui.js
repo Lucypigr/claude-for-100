@@ -36,9 +36,15 @@ var UI = (function () {
     try { auto = sessionStorage.getItem('stzb_autocontinue') === '1'; sessionStorage.removeItem('stzb_autocontinue'); } catch (e) { /* */ }
     if (auto && Game.hasSave()) setTimeout(continueGame, 0);
     document.addEventListener('click', onClick);
-    const tp = $('#teampanel');
-    tp.addEventListener('pointerdown', () => { teamPanelDown = true; });
-    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) tp.addEventListener(ev, () => { teamPanelDown = false; });
+    trackPress();
+    // 圖鑑搜尋：只更新清單，不重建整頁（輸入框才不會失去焦點）
+    document.addEventListener('input', e => {
+      if (e.target.id !== 'codex-q' && e.target.id !== 'codex-sq') return;
+      if (e.target.id === 'codex-q') codex.q = e.target.value.trim(); else codex.sq2 = e.target.value.trim();
+      codex.shown = 80;
+      const box = $('#codex-list');
+      if (box) box.innerHTML = codex.tab === 'hero' ? codexHeroList() : codexSkillList();
+    });
     $('#chatform').addEventListener('submit', e => { e.preventDefault(); sendChat(); });
     // 中文輸入法選字時按 Enter 不應送出訊息
     $('#chatin').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.isComposing || e.keyCode === 229)) e.preventDefault(); });
@@ -118,7 +124,23 @@ var UI = (function () {
     const sp = [0, 1, 2, 5, 10, 20];
     $('#speed').innerHTML = sp.map(v => '<button data-act="speed" data-v="' + v + '">' + (v === 0 ? '暫停' : v + '×') + '</button>').join('');
   }
-  let lastAuto = 0, lastTeamHtml = '', teamPanelDown = false;
+  let lastAuto = 0;
+  // 圖鑑狀態：tab = hero / skill；q = 搜尋字
+  const codex = { tab: 'hero', star: 0, fac: '', troop: '', own: '', q: '', sel: -1, sq: '', sty: '', sq2: '', sown: '', shown: 80 };
+  // 手指/滑鼠按住時，不重建被按的區塊（HUD、面板、土地選單）：否則點擊會落在已被換掉的按鈕上而失效，手機點按較慢時特別明顯
+  let pressedEl = null, pressTimer = 0;
+  const PRESS_ZONES = '#modal, #teampanel, #resbar, #tilepop, #menubar, #chatbox, #alert, #quest-mini';
+  function trackPress() {
+    document.addEventListener('pointerdown', e => { clearTimeout(pressTimer); pressedEl = e.target.closest ? e.target.closest(PRESS_ZONES) : null; }, true);
+    const rel = () => { clearTimeout(pressTimer); pressTimer = setTimeout(() => { pressedEl = null; }, 80); };
+    for (const ev of ['pointerup', 'pointercancel']) document.addEventListener(ev, rel, true);
+  }
+  // 內容沒變就不重建；正在被按的區塊也不重建（稍後下一次更新再補上）
+  function setHtml(el, html) {
+    if (el._h === html || (pressedEl && pressedEl === el)) return false;
+    el._h = html; el.innerHTML = html;
+    return true;
+  }
   // 自動增兵：待命在主城、兵力沒滿的部隊自動征兵（資源或預備兵不足時 recruit 會失敗，直接略過）
   function autoRecruitTick(force) {
     if (!user.autoRecruit) return;
@@ -137,7 +159,7 @@ var UI = (function () {
       // 正在面板輸入框打字時不重繪，否則輸入框會被清空、失去焦點
       const ae = document.activeElement;
       const typing = ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && $('#modal').contains(ae);
-      if (['city', 'teams', 'season', 'alliance', 'quests'].includes(panel) && !teamPick && !typing) refreshPanel(true);
+      if (['city', 'teams', 'season', 'alliance', 'quests'].includes(panel) && !teamPick && !typing && !(pressedEl && pressedEl.id === 'modal')) refreshPanel(true);
     }
     if (tileSel >= 0 && now - (update.tp || 0) > 1000) { update.tp = now; if (tilePopMode === 'info') renderTilePop(); }
     if (G.over && !update.shownOver) { update.shownOver = true; openPanel('settle'); }
@@ -159,7 +181,7 @@ var UI = (function () {
     h += '<div class="res" title="戰法點：用於升級戰法，可由武將轉化取得"><i class="ri skp">法</i><b>' + U.fmt(user.skp) + '</b></div>';
     h += '<div class="res" title="銅幣"><i class="ri copper">銅</i><b>' + U.fmt(user.copper) + '</b><small>+' + U.fmt(user.prod.copper) + '</small><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
     h += '<div class="res" title="金銖"><i class="ri gold">金</i><b>' + U.fmt(user.gold) + '</b><button class="btn small plus" data-act="open" data-panel="recharge" title="儲值">+</button></div>';
-    $('#resbar').innerHTML = h;
+    setHtml($('#resbar'), h);
     const ph = Game.phase();
     $('#clock-time').textContent = U.fmtClock(G.time);
     $('#clock-phase').textContent = '賽季 ' + (Game.day() + 1) + '/' + CFG.SEASON_DAYS + ' 天・' + ph.name;
@@ -209,9 +231,7 @@ var UI = (function () {
       h += '</div>';
     });
     // 內容沒變就不重建，且按住滑鼠/手指時不重建，避免點擊落在被替換掉的按鈕上
-    if (h === lastTeamHtml || teamPanelDown) return;
-    lastTeamHtml = h;
-    $('#teampanel').innerHTML = h;
+    setHtml($('#teampanel'), h);
   }
   function hudAlert() {
     const threats = G.marches.filter(m => m.type === 'attack' && m.pid !== user.id && Game.tileOwner(m.to) === user.id);
@@ -219,7 +239,7 @@ var UI = (function () {
     if (threats.length) {
       const m = threats.sort((a, b) => a.end - b.end)[0];
       const isMain = Game.T.city[m.to] >= 0 && World.cities[Game.T.city[m.to]].type === 'main';
-      el.innerHTML = '⚠ ' + threats.length + ' 支敵軍來襲！' + (isMain ? '<b>主城</b>' : '') + ' 最快 ' + U.fmtDur(m.end - G.time) + ' 後抵達 (' + World.X(m.to) + ',' + World.Y(m.to) + ')';
+      setHtml(el, '⚠ ' + threats.length + ' 支敵軍來襲！' + (isMain ? '<b>主城</b>' : '') + ' 最快 ' + U.fmtDur(m.end - G.time) + ' 後抵達 (' + World.X(m.to) + ',' + World.Y(m.to) + ')');
       el.dataset.tile = m.to;
       el.classList.remove('hidden');
     } else el.classList.add('hidden');
@@ -229,7 +249,7 @@ var UI = (function () {
     const el = $('#quest-mini');
     if (!q) { el.classList.add('hidden'); return; }
     const done = q.check(user);
-    el.innerHTML = '<div class="qt">主線：' + q.name + '</div><div class="' + (done ? 'done' : 'muted') + '">' + q.desc + (done ? '　✔ 可領取' : '') + '</div>';
+    setHtml(el, '<div class="qt">主線：' + q.name + '</div><div class="' + (done ? 'done' : 'muted') + '">' + q.desc + (done ? '　✔ 可領取' : '') + '</div>');
     el.dataset.act = 'open'; el.dataset.panel = 'quests';
   }
   function hudBadges() {
@@ -403,7 +423,7 @@ var UI = (function () {
     const owner = Game.tileOwner(i), alli = Game.tileAlliance(i);
     if (T.terrain[i] === TERRAIN.MOUNTAIN || T.terrain[i] === TERRAIN.WATER) {
       h += '<div class="muted">無法通行，也無法佔領。</div></div>';
-      el.innerHTML = h; return;
+      setHtml(el, h); return;
     }
     if (owner >= 0) {
       const o = Game.P[owner];
@@ -481,7 +501,7 @@ var UI = (function () {
       h += '</div>';
       if (!friendly && why) h += '<div class="why">' + why + '</div>';
     }
-    el.innerHTML = h;
+    setHtml(el, h);
   }
   function row(a, b) { return '<div class="row"><span>' + a + '</span><span>' + b + '</span></div>'; }
   function estLabel(w) {
@@ -626,6 +646,17 @@ var UI = (function () {
         teamPick = null; refreshPanel(); break;
       }
       case 'unslot': { const r = Game.setSlot(user, teamPick.ti, teamPick.slot, 0); if (!r.ok) toast(r.msg, 'warn'); teamPick = null; refreshPanel(); break; }
+      case 'cxtab': codex.tab = d.tab; codex.sel = -1; codex.shown = 80; refreshPanel(false, true); break;
+      case 'cxf': {
+        const k = d.k;
+        codex[k] = k === 'star' ? +d.v : d.v;
+        codex.shown = 80;
+        refreshPanel(); break;
+      }
+      case 'cxsel': codex.sel = +d.id; refreshPanel(false, true); break;
+      case 'cxmore': codex.shown += 80; refreshPanel(); break;
+      case 'poolinfo': panelArg = panelArg && panelArg.pool === d.pack ? null : { pool: d.pack, star: 5 }; refreshPanel(); break;
+      case 'poolstar': panelArg = { pool: panelArg.pool, star: +d.star }; refreshPanel(); break;
       case 'pfilter': {
         const k = d.k, v = d.v;
         if (k === 'idle' || k === 'sta') pickFilter[k] = v === '1';
@@ -636,7 +667,12 @@ var UI = (function () {
       case 'cancelpick': teamPick = null; refreshPanel(); break;
       case 'teamhome': { const r = Game.send(user, +d.ti, user.cityTile, 'move'); toast(r.ok ? '部隊返回主城' : r.msg, r.ok ? 'info' : 'warn'); refreshPanel(); break; }
       case 'upgrade': { const r = Game.upgradeBuilding(user, d.key); toast(r.ok ? BUILDING_BY_KEY[d.key].name + ' 開始升級' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
-      case 'hero': heroSel = +d.uid; refreshPanel(); break;
+      case 'hero': {
+        heroSel = +d.uid; refreshPanel();
+        const dt = $('#modal .hdetail');
+        if (dt && matchMedia('(max-width: 900px)').matches) dt.scrollIntoView({ block: 'start' }); // 直式/窄螢幕：詳情在清單下方，選了就捲過去
+        break;
+      }
       case 'hfilter': heroFilter = d.f; refreshPanel(); break;
       case 'addpt': { const r = Game.addPoint(user, heroSel, d.stat, +d.n || 1); if (!r.ok) toast(r.msg, 'warn'); refreshPanel(); break; }
       case 'resetpt': Game.resetPoints(user, heroSel); refreshPanel(); break;
@@ -745,17 +781,17 @@ var UI = (function () {
   }
 
   // ================= 面板 =================
-  const PANEL_TITLE = { city: '主城內政', heroes: '武將', teams: '部隊', recruit: '招募', skills: '戰法', reports: '戰報', alliance: '同盟', world: '天下大勢', rank: '排行榜', wanted: '通緝', honor: '榮譽', season: '賽季', quests: '任務', settings: '設定', help: '新手指南', recharge: '儲值', settle: '賽季結算' };
+  const PANEL_TITLE = { city: '主城內政', heroes: '武將', teams: '部隊', recruit: '招募', skills: '戰法', reports: '戰報', alliance: '同盟', world: '天下大勢', rank: '排行榜', wanted: '通緝', honor: '榮譽', codex: '圖鑑', season: '賽季', quests: '任務', settings: '設定', help: '新手指南', recharge: '儲值', settle: '賽季結算' };
   function openPanel(name, arg) {
     panel = name; panelArg = arg || null; panelTab = null; teamPick = null; drawResult = null;
     if (name === 'heroes' && !heroSel && user.heroes.length) heroSel = user.heroes[0].uid;
     $('#modal .win-title span').textContent = PANEL_TITLE[name] || '';
     $('#modal').classList.remove('hidden');
     closeTile();
-    refreshPanel();
+    refreshPanel(false, true);
   }
   function closeModal() { $('#modal').classList.add('hidden'); panel = null; teamPick = null; }
-  function refreshPanel(soft) {
+  function refreshPanel(soft, reset) {
     if (!panel) return;
     const body = $('#modal .win-body');
     const st = body.scrollTop;
@@ -766,7 +802,10 @@ var UI = (function () {
     // 重繪會重建輸入框：先記下內容與焦點，重繪後還原
     const fields = {};
     body.querySelectorAll('input[id],textarea[id]').forEach(el => { if (el.type !== 'checkbox') fields[el.id] = { v: el.value, f: el === document.activeElement, s: el.selectionStart, e: el.selectionEnd }; });
-    body.innerHTML = f ? f() : '';
+    const html = f ? f() : '';
+    if (soft && body._h === html && body._p === panel) return; // 內容沒變就不重建（保留按鈕的按壓狀態與捲動）
+    body._h = html; body._p = panel;
+    body.innerHTML = html;
     for (const id in fields) {
       const el = document.getElementById(id);
       if (!el || !body.contains(el)) continue;
@@ -774,7 +813,7 @@ var UI = (function () {
       if (fields[id].f) { el.focus(); try { el.setSelectionRange(fields[id].s, fields[id].e); } catch (e) { /* */ } }
     }
     body.querySelectorAll('[data-keep]').forEach(el => { if (scrollers[el.dataset.keep] !== undefined) el.scrollTop = scrollers[el.dataset.keep]; });
-    if (soft) body.scrollTop = st;
+    if (!reset) body.scrollTop = st; // 強化戰法、加點等操作後不要跳回頁首；只有剛開啟面板才回到頂端
     if (panel === 'settings') fillHist('#save-hist');
     if (panel === 'world') {
       const cv = $('#bigworld');
@@ -875,7 +914,7 @@ var UI = (function () {
       h += '<div class="filter">' + [['all', '全部'], ['team', '上陣'], ['漢', '漢'], ['魏', '魏'], ['蜀', '蜀'], ['吳', '吳'], ['群', '群'], ['騎', '騎兵'], ['步', '步兵'], ['弓', '弓兵']].map(([k, n]) => '<button data-act="hfilter" data-f="' + k + '" class="' + (flt === k ? 'on' : '') + '">' + n + '</button>').join('') + '<span class="muted" style="margin-left:8px">共 ' + user.heroes.length + ' 名</span></div>';
       h += '<div class="filter"><button class="btn small dark" data-act="bulklow" title="閒置的 2、3 星武將全部轉化為戰法點">一鍵分解 2★3★</button><button class="btn small dark" data-act="bulkkeep" title="3、4 星每種武將保留一張，其餘閒置的全部轉化">3★4★ 保留一張其餘分解</button></div>';
       h += '<div class="hero-list" data-keep="hl">' + shown.map(x => heroCardHtml(x, { act: 'hero', sel: x.uid === heroSel })).join('') + '</div></div>';
-      h += '<div class="hdetail">' + heroDetail() + '</div></div>';
+      h += '<div class="hdetail" data-keep="hd">' + heroDetail() + '</div></div>';
       return h;
     },
 
@@ -958,9 +997,10 @@ var UI = (function () {
     recruit() {
       let h = '<div class="packs">';
       for (const pk of CFG.PACKS.filter(x => !x.hidden)) {
-        h += '<div class="pack' + (pk.elite ? ' elite' : '') + '"><div class="pn">' + pk.name + '</div><div class="pr">' + pk.rates.map(([s, r]) => s + '★ ' + (r * 100).toFixed(1) + '%').join('　') + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>' + costHtml(pk.price) + '<br><button class="btn big ' + (pk.price.gold ? 'red' : '') + '" data-act="draw" data-pack="' + pk.key + '">招募' + (pk.count ? pk.count + '次' : '') + '</button></div>';
+        h += '<div class="pack' + (pk.elite ? ' elite' : '') + '"><div class="pn">' + pk.name + '</div><div class="pr">' + pk.rates.map(([s, r]) => s + '★ ' + (r * 100).toFixed(1) + '%').join('　') + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>' + costHtml(pk.price) + '<br><button class="btn big ' + (pk.price.gold ? 'red' : '') + '" data-act="draw" data-pack="' + pk.key + '">招募' + (pk.count ? pk.count + '次' : '') + '</button> <button class="btn small dark" data-act="poolinfo" data-pack="' + pk.key + '">卡池機率</button></div>';
       }
       h += '</div>';
+      if (panelArg && panelArg.pool) h += poolInfoHtml(panelArg.pool, panelArg.star);
       if (drawResult && drawResult.length > 5) {
         const cnt = {}; for (const x of drawResult) { const st = Game.tpl(x).star; cnt[st] = (cnt[st] || 0) + 1; }
         h += '<div class="sec-t">招募結果（共 ' + drawResult.length + ' 名）</div><div class="muted">' + [5, 4, 3, 2, 1].filter(st => cnt[st]).map(st => st + '★ ×' + cnt[st]).join('　') + '（依星級排序）</div>';
@@ -1110,6 +1150,23 @@ var UI = (function () {
         h += '<tr><td><b style="color:' + FACTION_COLOR[t.faction] + '">' + E(t.name) + '</b></td><td>' + t.faction + '</td><td>' + t.troop + '</td><td>' + t.cost + '</td><td>' + (own || '') + '</td><td><button class="btn small ' + (can ? 'gold' : 'dark') + '" data-act="honorexch" data-id="' + t.id + '"' + (can ? '' : ' disabled') + '>兌換 ' + price + '</button></td></tr>';
       }
       return h + '</table></div>';
+    },
+
+    codex() {
+      const chip = (k, v, label, on) => '<button data-act="cxf" data-k="' + k + '" data-v="' + v + '" class="' + (on ? 'on' : '') + '">' + label + '</button>';
+      let h = '<div class="filter"><button data-act="cxtab" data-tab="hero" class="' + (codex.tab === 'hero' ? 'on' : '') + '">武將圖鑑（' + HEROES.length + '）</button><button data-act="cxtab" data-tab="skill" class="' + (codex.tab === 'skill' ? 'on' : '') + '">戰法圖鑑（' + Object.keys(SKILLS).filter(k => SKILLS[k] && SKILLS[k].name).length + '）</button></div>';
+      if (codex.tab === 'hero') {
+        if (codex.sel >= 0) return h + codexHeroDetail(codex.sel);
+        const have = new Set(user.heroes.map(x => x.t));
+        h += '<div class="muted" style="font-size:12px">已擁有 ' + have.size + ' / ' + HEROES.length + ' 種武將（含不同版本）。點武將看詳細資料、戰法與取得方式。</div>';
+        h += '<div class="filter">' + chip('star', 0, '全部星級', !codex.star) + [5, 4, 3, 2, 1].map(st => chip('star', st, st + '★', codex.star === st)).join('') + '</div>';
+        h += '<div class="filter">' + chip('fac', '', '全部陣營', !codex.fac) + ['漢', '魏', '蜀', '吳', '群'].map(x => chip('fac', x, x, codex.fac === x)).join('') + '<span style="width:8px"></span>' + chip('troop', '', '全部兵種', !codex.troop) + ['騎', '步', '弓'].map(x => chip('troop', x, x + '兵', codex.troop === x)).join('') + '<span style="width:8px"></span>' + chip('own', '', '全部', !codex.own) + chip('own', 'have', '已擁有', codex.own === 'have') + chip('own', 'miss', '未擁有', codex.own === 'miss') + '</div>';
+        h += '<div class="filter"><input id="codex-q" placeholder="搜尋武將名稱" value="' + E(codex.q) + '" style="background:#efe2c2;border:1px solid #8a6a34;padding:6px 8px;width:180px;font-size:14px"></div>';
+        return h + '<div id="codex-list">' + codexHeroList() + '</div>';
+      }
+      h += '<div class="filter">' + chip('sq', '', '全部品質', !codex.sq) + ['S', 'A', 'B', 'C', 'D'].map(x => chip('sq', x, x + ' 級', codex.sq === x)).join('') + '<span style="width:8px"></span>' + chip('sty', '', '全部類型', !codex.sty) + [['active', '主動'], ['passive', '被動'], ['command', '指揮'], ['pursuit', '追擊']].map(([v, l]) => chip('sty', v, l, codex.sty === v)).join('') + '<span style="width:8px"></span>' + chip('sown', '', '全部', !codex.sown) + chip('sown', 'have', '已擁有', codex.sown === 'have') + chip('sown', 'miss', '未擁有', codex.sown === 'miss') + '</div>';
+      h += '<div class="filter"><input id="codex-sq" placeholder="搜尋戰法名稱或說明" value="' + E(codex.sq2) + '" style="background:#efe2c2;border:1px solid #8a6a34;padding:6px 8px;width:220px;font-size:14px"></div>';
+      return h + '<div id="codex-list">' + codexSkillList() + '</div>';
     },
 
     wanted() {
@@ -1266,6 +1323,102 @@ var UI = (function () {
     return { skills: r.skills.filter(id => id !== t.skill), why: r.why, web: r.web };
   }
 
+  function codexHeroList() {
+    const have = {}; for (const x of user.heroes) have[x.t] = (have[x.t] || 0) + 1;
+    const order = ['漢', '魏', '蜀', '吳', '群'];
+    const q = codex.q;
+    const list = HEROES.filter(t => (!codex.star || t.star === codex.star) && (!codex.fac || t.faction === codex.fac) && (!codex.troop || t.troop === codex.troop) &&
+      (!codex.own || (codex.own === 'have') === !!have[t.id]) && (!q || t.name.includes(q)))
+      .sort((a, b) => b.star - a.star || order.indexOf(a.faction) - order.indexOf(b.faction) || a.id - b.id);
+    let h = '<div class="muted" style="font-size:12px;margin:4px 0">符合 ' + list.length + ' 名' + (list.length > codex.shown ? '（先顯示 ' + codex.shown + ' 名）' : '') + '</div><div class="picker">';
+    for (const t of list.slice(0, codex.shown)) {
+      const card = heroCardHtml({ t: t.id, lv: 1, adv: 0, team: -1, exp: 0, troops: 0, wnd: 0 }, { noTeam: true, act: 'cxsel', cls: have[t.id] ? '' : 'dim', extra: ' data-id="' + t.id + '"' });
+      h += card;
+    }
+    h += '</div>';
+    if (list.length > codex.shown) h += '<button class="btn small dark" data-act="cxmore">顯示更多</button>';
+    return h;
+  }
+  function codexSkillList() {
+    const have = new Set(user.lib);
+    const q = codex.sq2.toLowerCase();
+    const QO = { S: 0, A: 1, B: 2, C: 3, D: 4 };
+    const list = Object.values(SKILLS).filter(sk => sk && sk.name && (!codex.sq || sk.q === codex.sq) && (!codex.sty || sk.type === codex.sty) &&
+      (!codex.sown || (codex.sown === 'have') === have.has(sk.id)) && (!q || sk.name.toLowerCase().includes(q) || (sk.desc || '').toLowerCase().includes(q)))
+      .sort((a, b) => QO[a.q] - QO[b.q] || a.name.localeCompare(b.name));
+    const TY = { active: '主動', passive: '被動', command: '指揮', pursuit: '追擊' };
+    let h = '<div class="muted" style="font-size:12px;margin:4px 0">符合 ' + list.length + ' 個' + (list.length > codex.shown ? '（先顯示 ' + codex.shown + ' 個）' : '') + '</div>';
+    for (const sk of list.slice(0, codex.shown)) {
+      const own = HEROES.filter(t => t.skill === sk.id).slice(0, 4).map(t => E(t.name));
+      h += '<div class="skslot"><span class="sn q-' + sk.q + '">' + E(sk.name) + '</span><span class="st">' + TY[sk.type] + (sk.chance ? ' ' + Math.round(sk.chance * 100) + '%' : '') + '</span>' + (sk.troops ? '<span class="st">' + sk.troops.join('') + '兵</span>' : '') + (have.has(sk.id) ? ' <span class="good" style="font-size:12px">已擁有</span>' : '') +
+        '<div class="sd">' + E(sk.desc || '') + '</div>' + (own.length ? '<div class="muted" style="font-size:12px">自帶：' + own.join('、') + '</div>' : '') + skillSourceHtml(sk.id) + '</div>';
+    }
+    if (list.length > codex.shown) h += '<button class="btn small dark" data-act="cxmore">顯示更多</button>';
+    return h;
+  }
+  function codexHeroDetail(id) {
+    const t = HEROES[id];
+    if (!t) return '';
+    const own = user.heroes.filter(x => x.t === id);
+    const at = (k, lv) => (t[k] + t[k + 'G'] * (lv - 1)).toFixed(0);
+    const TY = { active: '主動', passive: '被動', command: '指揮', pursuit: '追擊' };
+    const sk = SKILLS[t.skill], ih = SKILLS[t.inherit];
+    let h = '<button class="btn small dark" data-act="cxsel" data-id="-1">← 返回圖鑑</button>';
+    h += '<div class="hd-top">' + heroCardHtml({ t: id, lv: 1, adv: 0, team: -1, exp: 0, troops: 0, wnd: 0 }, { noTeam: true }) + '<div><div class="hd-name">' + E(t.name) + '</div><div class="muted">' + '★'.repeat(t.star) + '　' + t.faction + '・' + t.troop + '兵　統御 ' + t.cost + '　攻擊距離 ' + t.range + '</div><div style="margin-top:4px">' + (own.length ? '<span class="good">你擁有 ' + own.length + ' 張（最高 Lv' + Math.max(...own.map(x => x.lv)) + '）</span>' : '<span class="muted">尚未擁有</span>') + '</div></div></div>';
+    h += '<div class="sec-t">屬性</div><table class="tbl"><tr><th></th><th>初始</th><th>成長/級</th><th>30 級</th><th>50 級</th></tr>';
+    for (const [k, n] of [['atk', '攻擊'], ['def', '防禦'], ['int', '謀略'], ['spd', '速度']]) h += '<tr><td>' + n + '</td><td>' + t[k] + '</td><td>+' + t[k + 'G'] + '</td><td>' + at(k, 30) + '</td><td>' + at(k, 50) + '</td></tr>';
+    h += '<tr><td>攻城</td><td>' + t.siege + '</td><td>+' + (t.siegeG || 0) + '</td><td>' + (t.siege + (t.siegeG || 0) * 29).toFixed(0) + '</td><td>' + (t.siege + (t.siegeG || 0) * 49).toFixed(0) + '</td></tr></table>';
+    h += '<div class="sec-t">戰法</div>';
+    if (sk) h += '<div class="skslot"><span class="sn q-' + sk.q + '">' + E(sk.name) + '</span><span class="st">' + TY[sk.type] + (sk.chance ? ' ' + Math.round(sk.chance * 100) + '%' : '') + '</span><span class="st" style="background:#6e2a1a">自帶</span><div class="sd">' + E(sk.desc || '') + '</div></div>';
+    if (ih && ih.id !== (sk && sk.id)) h += '<div class="skslot"><span class="sn q-' + ih.q + '">' + E(ih.name) + '</span><span class="st">' + TY[ih.type] + '</span><span class="st" style="background:#2f5f8a">傳承</span><div class="sd">' + E(ih.desc || '') + '</div></div>';
+    const rec = RECOMMEND[t.name];
+    if (rec && rec.skills.length) {
+      h += '<div class="sec-t">推薦戰法' + (rec.web ? ' <span class="st" style="background:#2f6b3a">參考社群攻略</span>' : '') + '</div><div class="muted" style="font-size:12px">' + E(rec.why) + '</div>';
+      for (const sid of rec.skills.filter(x => x !== t.skill)) { const r = SKILLS[sid]; h += '<div class="skslot"><span class="sn q-' + r.q + '">' + E(r.name) + '</span><span class="st">' + TY[r.type] + '</span><div class="sd">' + E(r.desc || '') + '</div></div>'; }
+    }
+    h += '<div class="sec-t">取得方式</div><div class="muted" style="font-size:13px">';
+    const pools = CFG.PACKS.filter(pk => pk.rates.some(r => r[0] === t.star));
+    h += pools.map(pk => { const n = HEROES.filter(x => x.star === t.star).length, r = pk.rates.find(x => x[0] === t.star)[1]; return '・' + E(pk.name) + (pk.hidden ? '（已隱藏）' : '') + '：每次抽到約 ' + (r / n * 100).toFixed(3) + '%'; }).join('<br>');
+    if (Game.HONOR_PRICE[t.star]) h += '<br>・榮譽兌換：' + Game.HONOR_PRICE[t.star] + ' 榮譽點（擊破黃巾軍營寨取得）';
+    h += '</div>';
+    return h;
+  }
+  // 卡池機率：各星級機率、該星級的武將清單與單一武將的機率（星級內平均抽出），含保底的實際期望
+  function poolInfoHtml(key, star) {
+    const pk = CFG.PACKS.find(x => x.key === key);
+    if (!pk) return '';
+    const byStar = {};
+    for (const t of HEROES) (byStar[t.star] = byStar[t.star] || []).push(t);
+    const rate = st => (pk.rates.find(r => r[0] === st) || [0, 0])[1];
+    let h = '<div class="sec-t">' + E(pk.name) + '　卡池機率</div>';
+    h += '<div class="muted" style="font-size:12px">價格：' + (pk.price.gold ? pk.price.gold + ' 金銖' : pk.price.copper + ' 銅幣') + (pk.count > 1 ? '，一次抽 ' + pk.count + ' 次' : '') + '。每次抽卡先依星級機率決定星級，再從該星級所有武將中平均抽出。' + (pk.note ? '<br><b class="good">' + pk.note + '</b>' : '') + '</div>';
+    if (pk.pity5) {
+      // 保底後的期望五星數：E[max(X, pity)]，X ~ Binomial(n, p)
+      const n = pk.count, p = rate(5);
+      let exp = 0, c = 1;
+      for (let k = 0; k <= n; k++) { if (k > 0) c = c * (n - k + 1) / k; exp += Math.max(k, pk.pity5) * c * Math.pow(p, k) * Math.pow(1 - p, n - k); }
+      h += '<div class="muted" style="font-size:12px">不含保底平均 ' + (n * p).toFixed(1) + ' 位五星；加上保底後平均約 <b class="good">' + exp.toFixed(1) + '</b> 位。</div>';
+    }
+    h += '<table class="tbl" style="margin:6px 0"><tr><th>星級</th><th>機率</th><th>武將數</th><th>單一武將機率</th>' + (pk.count > 1 ? '<th>' + pk.count + ' 抽平均</th>' : '') + '</tr>';
+    for (const st of [5, 4, 3, 2, 1]) {
+      const r = rate(st), n = (byStar[st] || []).length;
+      if (!r) continue;
+      h += '<tr><td>' + '★'.repeat(st) + '</td><td>' + (r * 100).toFixed(1) + '%</td><td>' + n + '</td><td>' + (n ? (r / n * 100).toFixed(3) : '0') + '%</td>' + (pk.count > 1 ? '<td>' + (r * pk.count).toFixed(1) + '</td>' : '') + '</tr>';
+    }
+    h += '</table>';
+    const stars = [5, 4, 3, 2, 1].filter(st => rate(st) > 0);
+    const cur = stars.includes(star) ? star : stars[0];
+    h += '<div class="filter">' + stars.map(st => '<button data-act="poolstar" data-star="' + st + '" class="' + (cur === st ? 'on' : '') + '">' + st + '★ 武將（' + (byStar[st] || []).length + '）</button>').join('') + '</div>';
+    const per = ((byStar[cur] || []).length ? rate(cur) / byStar[cur].length * 100 : 0).toFixed(3);
+    const order = ['漢', '魏', '蜀', '吳', '群'];
+    const list = (byStar[cur] || []).slice().sort((a, b) => order.indexOf(a.faction) - order.indexOf(b.faction) || a.id - b.id);
+    h += '<div class="muted" style="font-size:12px;margin-bottom:4px">每位 ' + per + '%　（你已擁有的標示張數）</div><div class="hist-list" style="max-height:240px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:4px">';
+    for (const t of list) {
+      const own = user.heroes.filter(x => x.t === t.id).length;
+      h += '<span style="border:1px solid ' + FACTION_COLOR[t.faction] + ';padding:1px 6px;font-size:12px;border-radius:3px" title="' + t.faction + '·' + t.troop + '兵 統御' + t.cost + '">' + E(t.name) + (own ? ' <b class="good">×' + own + '</b>' : '') + '</span>';
+    }
+    return h + '</div>';
+  }
   // 這個戰法可以分解（傳承）哪些武將取得：傳承戰法為此戰法、三星以上的武將；標示你擁有哪幾位
   function skillSourceHtml(sid) {
     const src = HEROES.filter(x => x.inherit === sid && x.star >= 3);

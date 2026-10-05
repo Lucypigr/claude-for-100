@@ -10,7 +10,7 @@ var AI = (function () {
     whale: { label: '課長', skill: [0.45, 0.9], act: [2, 6], aggr: [0.55, 1.0], gold: [18000, 50000], daily: [2500, 7000], chat: 1.0 },
   };
   const RAID_NAMES = ['劫火', '黑旗', '血狼', '鬼影', '屠城', '夜梟', '斷刃', '餓狼', '焚天', '裂空', '蝗群', '修羅'];
-  const MIX = [['newbie', 30], ['casual', 25], ['regular', 45], ['veteran', 30], ['whale', 20]];
+  const MIX = [['newbie', 34], ['casual', 28], ['regular', 50], ['veteran', 18], ['whale', 10]]; // 強力玩家（老手＋課長）約占 2 成
   // 土地守軍「50%勝率」所需戰力倍數（由離線模擬校準）
   let GP = null, CP = null;
   const R50 = [0, 0.6, 0.8, 1.45, 1.75, 1.9, 1.75, 1.65, 1.6, 1.55];

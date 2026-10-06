@@ -610,7 +610,7 @@ var AI = (function () {
     const sendCap = pr.skill > 0.7 ? 3 : 2;
     const marching0 = new Set(p.teams.filter(t => t.status === 'march').map(t => t.id));
     for (const team of p.teams) {
-      if (p.teams.filter(t => t.status === 'march' && !marching0.has(t.id)).length >= sendCap) break;
+      if (p.teams.filter(t => t.status === 'march' && !marching0.has(t.id)).length >= sendCap || g.time < (mem(p).nextSend || 0)) break;
       if (team.status !== 'idle' || team.rq) continue;
       const cap = Game.teamCapTroops(p, team);
       if (!cap) continue;
@@ -648,15 +648,11 @@ var AI = (function () {
       else if (hunting(p)) pvpP = Math.max(pvpP, 0.7);
       if (target < 0 && U.rnd() < pvpP) target = pvpTarget(p, team, tp);
       // 3) 擴張
-      // 擴張是例行公事：真人不會連珠炮式派兵，每次擴張之間會隔一段時間，次數少但每次挑最值得的地
-      let routine = false;
-      if (target < 0) {
-        if (g.time < (mem(p).nextExpand || 0)) { idleAction(p, team, tp); continue; }
-        target = expandTarget(p, team, tp); routine = target >= 0;
-      }
-      if (routine) mem(p).nextExpand = g.time + U.rint(6, 18) * (1.4 - pr.skill * 0.6);
+      if (target < 0) target = expandTarget(p, team, tp);
       if (target >= 0) {
         const r = Game.send(p, team.id, target, 'attack');
+        // 真人連續出兵也要看地圖、選部隊、點確認：兩次出兵之間總要隔幾分鐘
+        if (r.ok) mem(p).nextSend = g.time + U.rint(2, 7) * (1.4 - pr.skill * 0.6);
         const fr = mem(p).front;
         if (fr) { const k = fr.indexOf(target); if (k >= 0) fr.splice(k, 1); }
         if (!r.ok) continue;
@@ -854,9 +850,16 @@ var AI = (function () {
       if (p.landCount >= p.landCap && L < 5) continue;
       if (v > bs) { bs = v; best = i; }
     }
-    if (best >= 0 && bs > 150) return best;
+    const m0 = mem(p);
+    const pushing = m0.conquest >= 0 && g.time <= m0.conquestUntil;
+    if (best >= 0 && bs > 150 && !pushing) {
+      // 佔了對方的地就乘勝追擊：把對方設為征服目標，後續一路推進到對方主城
+      const op = Game.P[T.owner[best]];
+      if (pr.aggr > 0.45 && pr.skill > 0.4 && g.time > CFG.PROTECT_DAYS * 1440 && op && op.captor < 0 && g.time >= op.protectEnd && World.dist(best, op.cityTile) <= 25 && op.power < p.power * 1.15 && U.chance(0.7)) { m0.conquest = op.id; m0.conquestUntil = g.time + 720; }
+      return best;
+    }
     // 攻打弱小鄰居主城（課長/老手）
-    if (pr.aggr > 0.6 && (pr.skill > 0.5 || persona(p) === 'hothead') && g.time > CFG.PROTECT_DAYS * 1440) {
+    if ((pr.aggr > 0.6 && (pr.skill > 0.5 || persona(p) === 'hothead') || pushing) && g.time > CFG.PROTECT_DAYS * 1440) {
       const m = mem(p);
       if (m.conquest >= 0) {
         const op = Game.P[m.conquest];

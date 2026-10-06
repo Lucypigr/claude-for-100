@@ -122,7 +122,7 @@ var UI = (function () {
 
   // ================= HUD =================
   function buildSpeed() {
-    const sp = [0, 1, 2, 5, 10, 20];
+    const sp = [0, 0.2, 0.5, 1, 2, 5, 10, 20];
     $('#speed').innerHTML = sp.map(v => '<button data-act="speed" data-v="' + v + '">' + (v === 0 ? '暫停' : v + '×') + '</button>').join('');
   }
   let lastAuto = 0;
@@ -448,7 +448,7 @@ var UI = (function () {
       if (camp) h += row('黃巾軍營寨', '<span class="bad">守軍強度 Lv' + Game.effLvl(i) + '</span>，擊破可得榮譽點 <b class="good">+' + Game.honorOf(camp.lvl) + '</b>，剩 ' + U.fmtDur(camp.until - G.time));
       const g = CFG.GARRISON[Game.effLvl(i)];
       const st = G.landSiege[i];
-      h += row('守軍', g[0] + '隊 × ' + g[1] + '將 Lv' + g[2] + '，每將 ' + g[3] + ' 兵' + (st ? ' <span class="warn">(交戰中)</span>' : ''));
+      h += row('守軍', g[0] + '隊 × ' + g[1] + '將 Lv' + g[2] + '，每將 ' + g[3] + ' 兵' + (st ? ' <span class="warn">(交戰中，' + Math.max(1, Math.ceil(st.until - G.time)) + ' 分後恢復)</span>' : ''));
       if (!user.firstCap[i]) h += row('首佔名望', '+' + L * CFG.FAME_PER_LVL);
     } else if (city.type === 'main') {
       const o = Game.P[city.owner];
@@ -1075,6 +1075,7 @@ var UI = (function () {
       h += '</div><div class="rep-detail">';
       if (cur) {
         h += '<div class="sec-t">' + E(cur.target) + ' <span class="link" data-act="gototile" data-tile="' + cur.tile + '">(' + World.X(cur.tile) + ',' + World.Y(cur.tile) + ')</span>　<span class="' + (cur.win ? 'good' : 'bad') + '">' + E(cur.result) + '</span></div>';
+        if (cur.regen) h += '<div class="warn" style="margin:4px 0;font-size:13px">⏱ 守軍尚餘 ' + cur.regen.alive + '/' + cur.regen.total + ' 隊，約 <b>' + cur.regen.min + ' 分鐘</b>後恢復兵力（1× 約 ' + cur.regen.min + ' 秒、2× 約 ' + Math.ceil(cur.regen.min / 2) + ' 秒、5× 約 ' + Math.ceil(cur.regen.min / 5) + ' 秒）。要在恢復前再派部隊補打。</div>';
         cur.battles.forEach((b, k) => {
           h += '<div class="bside"><div class="col">' + b.A.slice().sort((x, y) => y.slot - x.slot).map(bu).join('') + '</div><div class="vs">VS</div><div class="col">' + b.D.slice().sort((x, y) => x.slot - y.slot).map(bu).join('') + '</div></div>';
           h += '<div class="muted" style="text-align:center">第 ' + (k + 1) + ' 場：對陣 ' + E(b.def) + '　' + (b.winner === 'atk' ? '<span class="good">進攻方勝</span>' : b.winner === 'def' ? '<span class="bad">防守方勝</span>' : '<span class="warn">平局</span>') + '（' + b.rounds + ' 回合）' + (b.morale !== undefined && b.morale < 100 ? '　進攻方' + moraleTag(b.morale) : '') +

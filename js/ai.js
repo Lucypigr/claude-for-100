@@ -607,6 +607,7 @@ var AI = (function () {
     const g = G();
     const pr = p.prof;
     // 真人一次操作不會把所有部隊同時派出：每次上線思考最多派出 2 支（技術好的 3 支）新行軍
+    reactions(p);
     const sendCap = pr.skill > 0.7 ? 3 : 2;
     const marching0 = new Set(p.teams.filter(t => t.status === 'march').map(t => t.id));
     for (const team of p.teams) {
@@ -1242,25 +1243,45 @@ var AI = (function () {
     const xy = '(' + World.X(tile) + ',' + World.Y(tile) + ')';
     if (p.ai && isMain && U.rnd() < pr.chat + 0.3) later(p, 'ally', U.pick(CHAT.help).replace('{n}', attacker.name).replace('{xy}', xy), U.rint(0, 3));
     const a = g.alliances[p.alliance];
-    let sent = 0, struck = 0;
+    // 盟友不會瞬間同時反應：要先看到通知、判斷、再操作，每人各自延遲幾分鐘到十幾分鐘才處理，且只有少數人會回應
+    let queued = 0;
     for (const id of a.members) {
-      if (sent >= 2 && struck >= 2) break;
+      if (queued >= 3) break;
       const q = Game.P[id];
-      if (!q.ai || q === p || (q.aiMem && g.time - (q.aiMem.lastAssist || -999) < 15)) continue;
+      if (!q.ai || q === p) continue;
+      const qm = mem(q);
+      if (g.time - (qm.lastAssist || -999) < 15) continue;
       const sk = q.prof.skill;
-      // 1) 出兵駐守受襲的領地（主城更積極）
-      if (sent < 2 && U.rnd() < sk * (isMain ? 0.7 : 0.45)) {
+      if (U.rnd() > 0.3 + sk * 0.3) continue;
+      const rq = qm.reacts || (qm.reacts = []);
+      if (rq.length >= 3) continue;
+      rq.push({ at: g.time + U.rint(4, 16) * (1.4 - sk * 0.6), p: p.id, att: attacker.id, tile, end: march.end, isMain });
+      queued++;
+    }
+  }
+  // 處理到期的盟友回應：出兵駐守受襲領地，或圍魏救趙反攻進攻者
+  function reactions(q) {
+    const g = G();
+    const qm = mem(q);
+    const rq = qm.reacts;
+    if (!rq || !rq.length) return;
+    const sk = q.prof.skill;
+    for (let k = rq.length - 1; k >= 0; k--) {
+      const r = rq[k];
+      if (r.at > g.time) continue;
+      rq.splice(k, 1);
+      if (g.time - (qm.lastAssist || -999) < 15) continue;
+      const p = Game.P[r.p], attacker = Game.P[r.att];
+      if (r.isMain || U.rnd() < 0.5) {
         for (const t of q.teams) {
           if (!Game.teamReady(q, t, CFG.COST_GARRISON)) continue;
-          const eta = Game.marchTime(q, t, t.base, tile);
-          if (G().time + eta >= march.end) continue;
-          const r = Game.send(q, t.id, tile, 'garrison');
-          if (r.ok) { sent++; mem(q).lastAssist = g.time; if (isMain || U.chance(0.3)) later(q, 'ally', U.pick(CHAT.support).replace('{n}', p.name), U.rint(0, 2)); break; }
+          if (g.time + Game.marchTime(q, t, t.base, r.tile) >= r.end) continue; // 來不及就不去
+          if (Game.send(q, t.id, r.tile, 'garrison').ok) { qm.lastAssist = g.time; if (r.isMain || U.chance(0.3)) later(q, 'ally', U.pick(CHAT.support).replace('{n}', p.name), U.rint(0, 2)); break; }
         }
       }
-      // 2) 圍魏救趙：反攻進攻者在附近的土地（侵略性高的盟友）
-      if (struck < 2 && U.rnd() < q.prof.aggr * sk * 0.6 && attacker.landCount > 0) {
-        if (counterStrike(q, attacker, tile)) { struck++; mem(q).lastAssist = g.time; if (U.chance(0.25)) later(q, 'ally', U.pick(CHAT.counter).replace('{n}', attacker.name), U.rint(0, 3)); }
+      if (g.time - (qm.lastAssist || -999) >= 1 && attacker.landCount > 0 && U.rnd() < q.prof.aggr * sk * 0.6 && counterStrike(q, attacker, r.tile)) {
+        qm.lastAssist = g.time;
+        if (U.chance(0.25)) later(q, 'ally', U.pick(CHAT.counter).replace('{n}', attacker.name), U.rint(0, 3));
       }
     }
   }

@@ -584,20 +584,74 @@ var Render = (function () {
       ctx.fillStyle = '#e0a030'; ctx.fillRect(sx - bw / 2, y, bw * c.dur / c.maxDur, 4);
     }
   }
+  // 要塞：一座城堡的圖案——石磚城牆、四角箭樓、城門與旗幟；建造中顯示鷹架、半成的牆與進度條
   function drawFort(c, sx, sy, hw, hh) {
     const rel = relOfPid(c.owner);
-    const col = REL_COLOR[rel];
-    const s = Math.max(5, cam.tw * 0.3);
-    ctx.fillStyle = '#6e5a3c';
-    ctx.fillRect(sx - s, sy - s * 1.1, s * 2, s * 1.1);
-    ctx.fillStyle = '#9b8458';
-    ctx.fillRect(sx - s, sy - s * 1.3, s * 2, s * 0.3);
-    ctx.fillStyle = rgb(col);
-    ctx.fillRect(sx - 1, sy - s * 2.2, s * 0.8, s * 0.5);
-    ctx.fillStyle = '#3a2a18'; ctx.fillRect(sx - 1, sy - s * 2.2, 1.5, s);
-    if (c.building > Game.G.time && cam.tw >= 20) {
-      ctx.font = '10px "Noto Serif TC", serif'; ctx.fillStyle = '#ffe08a'; ctx.fillText('建造中', sx, sy + hh);
+    const col = rgb(REL_COLOR[rel]);
+    const now = Game.G.time;
+    const building = c.building > now;
+    const prog = building ? Math.max(0.05, Math.min(1, 1 - (c.building - now) / CFG.FORT_BUILD_MIN)) : 1;
+    const w = Math.max(hw * 1.5, 18), h = Math.max(hh * 1.5, 9); // 底座菱形的半寬、半高
+    const wallH = Math.max(7, cam.tw * 0.26) * (building ? 0.35 + 0.65 * prog : 1);
+    ctx.save();
+    // 地基（菱形）
+    ctx.beginPath(); ctx.moveTo(sx, sy - h); ctx.lineTo(sx + w, sy); ctx.lineTo(sx, sy + h); ctx.lineTo(sx - w, sy); ctx.closePath();
+    ctx.fillStyle = building ? '#7c6a48' : '#8d7a52'; ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(30,20,10,0.8)'; ctx.stroke();
+    // 左右兩面城牆（立體）
+    ctx.beginPath(); ctx.moveTo(sx - w, sy); ctx.lineTo(sx, sy + h); ctx.lineTo(sx, sy + h - wallH); ctx.lineTo(sx - w, sy - wallH); ctx.closePath();
+    ctx.fillStyle = '#a89468'; ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx + w, sy); ctx.lineTo(sx, sy + h); ctx.lineTo(sx, sy + h - wallH); ctx.lineTo(sx + w, sy - wallH); ctx.closePath();
+    ctx.fillStyle = '#85734c'; ctx.fill(); ctx.stroke();
+    // 磚縫
+    if (cam.tw >= 24) {
+      ctx.strokeStyle = 'rgba(40,28,14,0.35)'; ctx.lineWidth = 0.8;
+      for (let k = 1; k < 3; k++) {
+        const y = wallH * k / 3;
+        ctx.beginPath(); ctx.moveTo(sx - w, sy - y); ctx.lineTo(sx, sy + h - y); ctx.lineTo(sx + w, sy - y); ctx.stroke();
+      }
     }
+    // 城門
+    const gw = w * 0.22, gh = wallH * 0.62;
+    ctx.fillStyle = '#2e2013';
+    ctx.beginPath(); ctx.moveTo(sx - gw, sy + h - gw * 0.5); ctx.lineTo(sx - gw, sy + h - gw * 0.5 - gh); ctx.lineTo(sx + gw, sy + h - gw * 0.5 - gh); ctx.lineTo(sx + gw, sy + h - gw * 0.5); ctx.closePath(); ctx.fill();
+    if (!building) {
+      // 垛口（牆頭鋸齒）
+      ctx.fillStyle = '#b5a176';
+      for (let k = 0; k <= 5; k++) {
+        const f = k / 5;
+        ctx.fillRect(sx - w + w * f - 1.5, sy + h * f - wallH - 3, 3, 3);   // 左面牆頭
+        ctx.fillRect(sx + w - w * f - 1.5, sy + h * f - wallH - 3, 3, 3);   // 右面牆頭
+      }
+      // 四角箭樓
+      const tw = Math.max(4, w * 0.16), th = wallH * 0.75;
+      for (const [tx, ty] of [[sx, sy - h], [sx + w, sy], [sx, sy + h], [sx - w, sy]]) {
+        ctx.fillStyle = '#9a8660'; ctx.fillRect(tx - tw, ty - wallH - th, tw * 2, th);
+        ctx.fillStyle = '#5a3a22'; ctx.beginPath(); ctx.moveTo(tx - tw * 1.4, ty - wallH - th); ctx.lineTo(tx, ty - wallH - th - tw * 1.3); ctx.lineTo(tx + tw * 1.4, ty - wallH - th); ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = 'rgba(30,20,10,0.8)'; ctx.lineWidth = 1; ctx.strokeRect(tx - tw, ty - wallH - th, tw * 2, th);
+      }
+      // 旗幟（依敵我顏色）
+      const fx = sx, fy = sy - wallH - th * 1.4;
+      ctx.fillStyle = '#3a2a18'; ctx.fillRect(fx - 0.8, fy - wallH * 0.9, 1.6, wallH * 0.9 + th * 0.3);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(fx + 0.8, fy - wallH * 0.9); ctx.lineTo(fx + wallH * 0.85, fy - wallH * 0.7); ctx.lineTo(fx + 0.8, fy - wallH * 0.5); ctx.closePath(); ctx.fill();
+    } else {
+      // 鷹架：幾根木柱與橫木
+      ctx.strokeStyle = '#6b4a28'; ctx.lineWidth = 1.6;
+      for (const [tx, ty] of [[sx - w * 0.7, sy], [sx + w * 0.7, sy], [sx, sy - h * 0.7], [sx, sy + h * 0.9]]) {
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx, ty - wallH * 1.9); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.moveTo(sx - w * 0.7, sy - wallH * 1.4); ctx.lineTo(sx, sy + h * 0.9 - wallH * 1.4); ctx.lineTo(sx + w * 0.7, sy - wallH * 1.4); ctx.stroke();
+      // 進度條與標籤
+      const bw = Math.max(26, w * 1.2), by = sy + h + 6;
+      ctx.fillStyle = 'rgba(20,14,8,0.85)'; ctx.fillRect(sx - bw / 2, by, bw, 5);
+      ctx.fillStyle = '#f2c230'; ctx.fillRect(sx - bw / 2, by, bw * prog, 5);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 0.8; ctx.strokeRect(sx - bw / 2, by, bw, 5);
+      if (cam.tw >= 16) {
+        ctx.font = 'bold 11px "Noto Serif TC", serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = '#ffe08a';
+        ctx.fillText('興建要塞 ' + Math.round(prog * 100) + '%（剩 ' + Math.ceil(c.building - now) + ' 分）', sx, by + 7);
+      }
+    }
+    ctx.restore();
   }
 
   function drawCamp(c, sx, sy, hw, hh) {

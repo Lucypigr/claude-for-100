@@ -1195,6 +1195,7 @@ var Game = (function () {
     const report = logIt ? { id: G.nextReport++, t: G.time, tile: i, target: targetName, atkName: p.name, atkPid: p.id, defName: '', battles: [], result: '', read: false } : null;
     let won = true;
     let totalKill = 0;
+    let garrNote = null; // 守軍恢復資訊：{ min 分鐘後恢復, alive 剩餘隊數, total 總隊數 }
     const ownerPid = tileOwner(i);
     p.stats.battles++;
     // 1) 玩家防守部隊
@@ -1250,6 +1251,12 @@ var Game = (function () {
           if (report) addBattleToReport(report, null, res, (city ? city.name + '守軍' : '守軍') + (squadsState.length > 1 ? '（第' + (s + 1) + '隊）' : ''), p, i, targetName);
           if (res.winner !== 'atk') won = false;
         }
+        // 守軍還有兵力：記下幾分鐘後會恢復（土地：最後一次交戰後 30 分鐘；城池關口：首次交戰後 60 分鐘），讓玩家知道要在時限內再攻
+        const alive = squadsState.filter(sq => sq.some(t => t > 0)).length;
+        if (alive > 0) {
+          const until = isLand ? (G.landSiege[i] ? G.landSiege[i].until : G.time + 30) : (city.resetAt || G.time + CFG.GARRISON_RESET_MIN);
+          garrNote = { min: Math.max(1, Math.ceil(until - G.time)), alive, total: squadsState.length };
+        }
       }
     }
     // 經驗
@@ -1290,7 +1297,11 @@ var Game = (function () {
         result = siege(p, team, city, atkUnits, report);
       }
     }
+    if (garrNote && !won) {
+      result += '　守軍尚餘 ' + garrNote.alive + '/' + garrNote.total + ' 隊，約 ' + garrNote.min + ' 分鐘後恢復（1× 速度約 ' + garrNote.min + ' 秒）';
+    }
     if (report) {
+      if (garrNote) report.regen = garrNote;
       report.result = result;
       report.win = won;
       report.defName = report.defName || (ownerPid >= 0 ? P[ownerPid].name : '守軍');

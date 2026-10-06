@@ -648,7 +648,13 @@ var AI = (function () {
       else if (hunting(p)) pvpP = Math.max(pvpP, 0.7);
       if (target < 0 && U.rnd() < pvpP) target = pvpTarget(p, team, tp);
       // 3) 擴張
-      if (target < 0) target = expandTarget(p, team, tp);
+      // 擴張是例行公事：真人不會連珠炮式派兵，每次擴張之間會隔一段時間，次數少但每次挑最值得的地
+      let routine = false;
+      if (target < 0) {
+        if (g.time < (mem(p).nextExpand || 0)) { idleAction(p, team, tp); continue; }
+        target = expandTarget(p, team, tp); routine = target >= 0;
+      }
+      if (routine) mem(p).nextExpand = g.time + U.rint(6, 18) * (1.4 - pr.skill * 0.6);
       if (target >= 0) {
         const r = Game.send(p, team.id, target, 'attack');
         const fr = mem(p).front;

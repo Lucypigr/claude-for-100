@@ -150,7 +150,7 @@ var AI = (function () {
   // ================= 上線時段 =================
   // 真人不會 24 小時盯著遊戲：每位 AI 以 90 分鐘為一個時段決定「上線 / 離線」，離線時不行動（被攻擊時的緊急反應除外）。
   // 活躍度高的玩家在線時間較長；遊戲時間凌晨 2~7 點大家多半睡覺；開局前 6 小時所有人都在線（開荒）。
-  const ONLINE_P = { whale: 0.8, veteran: 0.7, regular: 0.55, casual: 0.4, newbie: 0.3 };
+  const ONLINE_P = { whale: 0.9, veteran: 0.85, regular: 0.75, casual: 0.6, newbie: 0.5 };
   function hash01(a, b) {
     let x = Math.imul(a + 1, 0x9e3779b1) ^ Math.imul(b + 7, 0x85ebca6b);
     x = Math.imul(x ^ (x >>> 15), 0x2c1b3c6d); x = Math.imul(x ^ (x >>> 12), 0x297a2d39);
@@ -161,7 +161,7 @@ var AI = (function () {
     if (t < 360) return true;
     let pr = ONLINE_P[p.prof.type] || 0.5;
     const hour = Math.floor((t % 1440) / 60);
-    if (hour >= 2 && hour < 7) pr *= 0.5;
+    if (hour >= 2 && hour < 7) pr *= 0.6;
     if (p.prof.leader) pr = Math.min(0.95, pr + 0.2); // 盟主多半在線
     return hash01(p.id, Math.floor(t / 90)) < pr;
   }
@@ -606,8 +606,8 @@ var AI = (function () {
   function military(p) {
     const g = G();
     const pr = p.prof;
-    // 真人一次只會操作一兩支部隊：每次上線思考最多派出 1 支（技術好的 2 支）新行軍
-    const sendCap = pr.skill > 0.8 ? 2 : 1;
+    // 真人一次操作不會把所有部隊同時派出：每次上線思考最多派出 2 支（技術好的 3 支）新行軍
+    const sendCap = pr.skill > 0.7 ? 3 : 2;
     const marching0 = new Set(p.teams.filter(t => t.status === 'march').map(t => t.id));
     for (const team of p.teams) {
       if (p.teams.filter(t => t.status === 'march' && !marching0.has(t.id)).length >= sendCap) break;

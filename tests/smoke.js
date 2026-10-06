@@ -108,3 +108,16 @@ for (const h of S.HEROES) {
   if (S.Game.drawPack(u5, 'elite5').ok) throw new Error('elite5 should need 10000');
   console.log('gacha pity + elite pool OK');
 }
+
+// 外掛：金銖換資源 / 秒返
+(() => {
+  const Game = S.Game, g = Game.newGame({ seed: 5, userName: '外掛測試' }), u = Game.P[0];
+  const chk = (c, m) => { if (!c) throw new Error('FAIL ' + m); };
+  u.gold = 1000; u.res.wood = 0;
+  const r = Game.buyResource(u, 'wood', 30000);
+  chk(r.ok && u.res.wood === r.got && u.gold === 1000 - r.cost, 'buyResource');
+  chk(!Game.buyResource(Game.P[1], 'wood', 1000).ok, 'buyResource AI blocked');
+  chk(!Game.rushHome(Game.P[1], 0).ok, 'rushHome AI blocked');
+  chk(Game.rushCost(u, 0) < 0, 'rushCost idle');
+  console.log('gold exchange + rush home OK');
+})();

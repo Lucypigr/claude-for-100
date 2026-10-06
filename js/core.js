@@ -922,6 +922,49 @@ var Game = (function () {
     m.start = G.time; m.end = G.time + Math.max(1, elapsed);
     return ok();
   }
+  // ===== 外掛（僅玩家可用）：用金銖換資源、秒返回主城 =====
+  const GOLD_RES_RATE = 300; // 1 金銖 = 300 單項資源
+  function buyResource(p, r, amt) {
+    if (p.id !== G.userId) return err('此功能僅限玩家使用');
+    if (CFG.RES.indexOf(r) < 0) return err('資源種類錯誤');
+    const room = Math.floor(Math.max(0, p.cap - p.res[r]));
+    const got = Math.min(amt, room);
+    if (got <= 0) return err('倉庫已滿，無法再兌換');
+    const cost = Math.max(1, Math.ceil(got / GOLD_RES_RATE));
+    if (p.gold < cost) return err('金銖不足（需要 ' + cost + '，目前 ' + Math.floor(p.gold) + '）');
+    p.gold -= cost;
+    p.res[r] += got;
+    return ok({ got, cost });
+  }
+  // 秒返成本：以回程剩餘時間估算（約每 4 分鐘 1 金銖，最少 1）
+  function rushCost(p, ti) {
+    const team = p.teams[ti];
+    if (!team) return -1;
+    let rem;
+    if (team.status === 'march') {
+      const m = G.marches.find(x => x.id === team.march);
+      if (!m) return -1;
+      rem = m.type === 'return' ? m.end - G.time : Math.max(1, G.time - m.start);
+    } else if (team.status === 'garrison' || team.status === 'train') rem = marchTime(p, team, team.gtile, baseValid(p, team.base) ? team.base : p.cityTile);
+    else return -1;
+    return Math.max(1, Math.ceil(rem / 4));
+  }
+  function rushHome(p, ti) {
+    if (p.id !== G.userId) return err('此功能僅限玩家使用');
+    const team = p.teams[ti];
+    const cost = rushCost(p, ti);
+    if (!team || cost < 0) return err('部隊不在外');
+    if (p.gold < cost) return err('金銖不足（需要 ' + cost + '，目前 ' + Math.floor(p.gold) + '）');
+    let r = ok();
+    if (team.status === 'garrison' || team.status === 'train') startReturn(p, team, team.gtile);
+    else { const m0 = G.marches.find(x => x.id === team.march); if (m0 && m0.type !== 'return') r = recall(p, ti); }
+    if (!r.ok) return r;
+    const m = G.marches.find(x => x.id === team.march);
+    if (!m) return err('找不到行軍');
+    p.gold -= cost;
+    m.end = G.time; // 下一個 tick 即抵達主城
+    return ok({ cost });
+  }
   function startReturn(p, team, fromTile) {
     if (!baseValid(p, team.base)) team.base = p.cityTile;
     const m = { id: G.nextMarch++, pid: p.id, team: team.id, type: 'return', from: fromTile, to: team.base, start: G.time, end: G.time + marchTime(p, team, fromTile, team.base) };
@@ -1799,7 +1842,7 @@ var Game = (function () {
     savePreset, deletePreset, applyPreset, swapTired, presetStamina, wantedList,
     drillSkill, convertHero, bulkConvertPlan, bulkConvert, convertValue, upgradeSkill, skillInvested, teamWounded, healTime,
     // 部隊
-    teamCount, costCap, teamHeroes, teamBonus, teamCost, teamTroops, teamCapTroops, teamMinSta, teamSpeed, teamUnits, teamPower, teamReady,
+    buyResource, rushHome, rushCost, GOLD_RES_RATE, teamCount, costCap, teamHeroes, teamBonus, teamCost, teamTroops, teamCapTroops, teamMinSta, teamSpeed, teamUnits, teamPower, teamReady,
     setSlot, autoFillTeam, recruit, recruitCost,
     // 資源建築
     canAfford, pay, gain, recompute, upgradeBuilding, mainCityMaxDur, allianceBonus,

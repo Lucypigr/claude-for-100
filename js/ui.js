@@ -633,6 +633,8 @@ var UI = (function () {
       }
       case 'gotoplayer': { const p = Game.P[+d.pid]; if (p) { goto(p.cityTile, 48); closeModal(); } break; }
       case 'gototile': { goto(+d.tile, 48); closeModal(); break; }
+      case 'rushhome': { const r = Game.rushHome(user, +d.ti); toast(r.ok ? '已花費 ' + r.cost + ' 金銖，部隊瞬間返回' : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
+      case 'buyres': { const r = Game.buyResource(user, d.res, +d.amt); toast(r.ok ? '花費 ' + r.cost + ' 金銖，獲得 ' + CFG.RES_NAME[d.res] + ' ' + U.fmtFull(r.got) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'recall': { const r = Game.recall(user, +d.ti); toast(r.ok ? '部隊撤回中' : r.msg, r.ok ? 'info' : 'warn'); refreshPanel(); break; }
       case 'recruit': { const r = Game.recruit(user, +d.ti, 1); toast(r.ok ? '開始征兵，需時 ' + U.fmtDur(r.time) : r.msg, r.ok ? 'good' : 'warn'); refreshPanel(); break; }
       case 'recruitall': { let n = 0; user.teams.forEach((t, ti) => { if (Game.recruit(user, ti, 1).ok) n++; }); toast(n ? n + ' 支部隊開始征兵' : '沒有可征兵的部隊（需在主城待命且資源足夠）', n ? 'good' : 'warn'); refreshPanel(); break; }
@@ -962,6 +964,7 @@ var UI = (function () {
         h += '<div class="team-row"><div class="trh"><span class="trn">第' + '一二三四五'[ti] + '部隊　<span class="ts ' + cls + '" style="font-size:13px">' + st + '</span></span>';
         h += '<span>';
         if (t.status === 'march' || t.status === 'garrison' || t.status === 'train') h += '<button class="btn small dark" data-act="recall" data-ti="' + ti + '">撤回</button> ';
+        if (Game.rushCost(user, ti) > 0) h += '<button class="btn small gold" data-act="rushhome" data-ti="' + ti + '" title="花金銖讓部隊瞬間回到主城">秒返 ' + Game.rushCost(user, ti) + '金</button> ';
         if (t.status === 'idle' && t.base !== user.cityTile) h += '<button class="btn small dark" data-act="teamhome" data-ti="' + ti + '">回主城</button> ';
         h += '<button class="btn small" data-act="savepreset" data-ti="' + ti + '" title="把這支部隊目前的三位武將存成一組配置">儲存配置</button> ';
         h += '<button class="btn small gold" data-act="swaptired" data-ti="' + ti + '" title="換上另一組體力足夠、兵力最多的配置">一鍵換隊</button> ';
@@ -1025,7 +1028,13 @@ var UI = (function () {
       let h = '<div class="muted">本遊戲為單機模擬，「儲值」不需付費，僅為體驗課長玩法。</div><div class="packs" style="margin-top:12px">';
       for (const [amt, lab] of [[680, '小月卡'], [3280, '中額禮包'], [6480, '648 大禮包'], [32800, '至尊大禮包']]) h += '<div class="pack"><div class="pn">' + lab + '</div><div class="pr">獲得 ' + amt + ' 金銖</div><button class="btn gold big" data-act="recharge" data-amt="' + amt + '">儲值</button></div>';
       h += '<div class="pack"><div class="pn">銅幣禮包</div><div class="pr">獲得 500,000 銅幣</div><button class="btn gold big" data-act="recharge" data-kind="copper" data-amt="500000">儲值</button></div>';
-      return h + '</div><div style="margin-top:10px">目前金銖：' + U.fmtFull(user.gold) + '</div>';
+      h += '</div><div class="sec-t">金銖兌換資源</div><div class="muted" style="font-size:12px">1 金銖 = ' + Game.GOLD_RES_RATE + ' 單項資源（不超過倉庫上限）；部隊在外時可在「部隊」頁用金銖秒返主城。</div>';
+      for (const r of CFG.RES) {
+        h += '<div style="margin:6px 0"><span style="display:inline-block;min-width:56px">' + CFG.RES_NAME[r] + '</span>';
+        for (const amt of [10000, 50000, 200000]) h += '<button class="btn small gold" data-act="buyres" data-res="' + r + '" data-amt="' + amt + '">' + U.fmt(amt) + '（' + Math.ceil(amt / Game.GOLD_RES_RATE) + '金）</button> ';
+        h += '</div>';
+      }
+      return h + '<div style="margin-top:10px">目前金銖：' + U.fmtFull(user.gold) + '</div>';
     },
 
     skills() {

@@ -698,7 +698,7 @@ var AI = (function () {
     if (stampGen > 4e9) { stamp.fill(0); stampGen = 1; }
     return stampGen;
   }
-  const STAGE_R = 12, STAGE_MAX = 300;
+  const STAGE_R = 12, STAGE_MAX = 360;
   // 集結據點：離目標 STAGE_R 格內、部隊可調動過去的己方據點或同盟城池（取離目標最近者）
   function stagingBase(p, team, ctr) {
     const a = G().alliances[p.alliance];
@@ -1025,7 +1025,7 @@ var AI = (function () {
         if (adj && a.phase === 'siege' && a.rallyAt && g.time > a.rallyAt + 150) {
           // 上一波未攻下：重新集結
           const cty = World.cities[a.target];
-          if (!cty.garrison || cty.alliance >= 0) { a.rallyAt = g.time + 60; if (leader.ai) Game.say(leader, 'ally', U.pick(CHAT.rally).replace('{c}', cty.name)); }
+          if (!cty.garrison || cty.alliance >= 0) { a.rallyAt = g.time + 60; a.stageSince = g.time; if (leader.ai) Game.say(leader, 'ally', U.pick(CHAT.rally).replace('{c}', cty.name)); }
         }
         if (adj && a.phase !== 'siege') {
           a.phase = 'siege';

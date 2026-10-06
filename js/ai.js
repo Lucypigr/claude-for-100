@@ -649,6 +649,8 @@ var AI = (function () {
       else if (hunting(p)) pvpP = Math.max(pvpP, 0.7);
       if (target < 0 && U.rnd() < pvpP) target = pvpTarget(p, team, tp);
       // 3) 擴張
+      // 體力吃緊的隊伍先歇著，不接例行擴張；留著體力給關鍵戰役
+      if (target < 0 && pr.skill > 0.5 && Game.teamMinSta(p, team) < CFG.COST_ATTACK * 2 && U.rnd() < pr.skill) continue;
       if (target < 0) target = expandTarget(p, team, tp);
       if (target >= 0) {
         const r = Game.send(p, team.id, target, 'attack');
@@ -780,7 +782,11 @@ var AI = (function () {
     const w = {};
     let mn = 1e9;
     for (const r of CFG.RES) mn = Math.min(mn, p.prod[r]);
-    for (const r of CFG.RES) w[r] = 1 + (p.prod[r] <= mn * 1.1 ? 0.35 : 0) + (r === 'stone' ? 0.1 : 0) + (r === 'grain' ? 0.15 : 0);
+    for (const r of CFG.RES) {
+      w[r] = 1 + (p.prod[r] <= mn * 1.1 ? 0.35 : 0) + (r === 'stone' ? 0.1 : 0) + (r === 'grain' ? 0.15 : 0);
+      // 看庫存規劃：快見底的資源優先搶，爆倉的就不急
+      if (p.res[r] < p.cap * 0.25) w[r] *= 1.5; else if (p.res[r] > p.cap * 0.9) w[r] *= 0.6;
+    }
     return w;
   }
 
@@ -836,21 +842,34 @@ var AI = (function () {
       if (o < 0 || o === p.id) continue;
       const op = Game.P[o];
       if (op.alliance >= 0 && sameBloc(op.alliance, p.alliance)) continue;
+      if (truced(p, op)) continue;
       if (p.captor >= 0 && (o === p.captor || (Game.P[p.captor].alliance >= 0 && op.alliance === Game.P[p.captor].alliance))) continue;
       const L = T.lvl[i];
       // 估計對方駐守與守軍
-      const enemyBest = bestTeamPower(op) * (op.teams.some(t => t.gtile === i) ? 1 : 0.15);
-      const ratio = mtp(p, team, tp, i) / (GP[L] * R50[L] + enemyBest * 0.9);
+      const enemyBest = knownPower(p, op) * (op.teams.some(t => t.gtile === i) ? 1 : 0.15);
+      const ratio = mtp(p, team, tp, i) * counterMult(p, team, op) / (GP[L] * R50[L] + enemyBest * 0.9);
       const w = winP(perceived(p, ratio));
       const rd = persona(p) === 'raider' && (op.power < p.power * 0.7 || !op.ai || op.prof.type === 'newbie' || op.prof.type === 'casual');
       if (w < (rd ? 0.45 : 0.55)) continue;
       // 趁火打劫：對方剛被打、或正被別人圍攻時更容易成為目標
       const hot = (op.lastLoss > 0 && g.time - op.lastLoss < 120 ? 110 : 0) + (op.incoming > 0 && g.time - op.incoming < 30 ? 90 : 0);
-      let v = L * 60 + (rd ? 220 : 0) + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 260 : 0) + hot - World.dist(i, team.base) * 5;
+      // 時機：對方深夜離線、部隊大多在外奔波或剛吃敗仗時最好下手；常被對方打、對方又比我強就別碰
+      const hr = Math.floor((g.time % 1440) / 60);
+      let timing = 0;
+      if (pr.skill > 0.4) {
+        if (op.ai && hr >= 2 && hr < 7) timing += 90;
+        const out = op.teams.filter(t => t.status === 'march').length;
+        if (op.teams.length && out / op.teams.length >= 0.6) timing += 70;
+      }
+      const rp = opRep(p, o);
+      timing += Math.min(3, rp.won) * 30 - (op.power > p.power ? rp.hurt * 60 : 0);
+      let v = timing + L * 60 + (rd ? 220 : 0) + (o === foe ? 400 : 0) + (op.alliance >= 0 && isEnemyAlliance(p, op.alliance) ? 260 : 0) + hot - World.dist(i, team.base) * 5;
       if (op.power > p.power * 1.5 && o !== foe && persona(p) !== 'warmonger' && persona(p) !== 'raider') v -= 200; // 不惹強者（好戰者例外）
       if (p.landCount >= p.landCap && L < 5) continue;
       if (v > bs) { bs = v; best = i; }
     }
+    // 出手前先偵察：沒有最新情報就先派斥候，這段時間先做別的事
+    if (best >= 0 && bs > 150 && !(mem(p).conquest >= 0) && scoutGate(p, Game.P[T.owner[best]], team.base)) return -1;
     const m0 = mem(p);
     const pushing = m0.conquest >= 0 && g.time <= m0.conquestUntil;
     if (best >= 0 && bs > 150 && !pushing) {
@@ -907,6 +926,57 @@ var AI = (function () {
     }
     return -1;
   }
+  // ---- 情報：真人看不到對手的完整陣容，要靠斥候；沒偵察過只能憑印象估計 ----
+  const INTEL_TTL = 360;
+  function intelFresh(p, op) { const it = (mem(p).intel || {})[op.id]; return it && G().time - it.t < INTEL_TTL ? it : null; }
+  function domTroop(op) {
+    const g = G();
+    if (op._dtT !== undefined && g.time - op._dtT < 120) return op._dt;
+    let bt = null, bp = -1;
+    for (const t of op.teams) { const pw = Game.teamPower(op, t); if (pw > bp) { bp = pw; bt = t; } }
+    const c = {};
+    if (bt) for (const u of Game.teamUnits(op, bt)) c[u.troop] = (c[u.troop] || 0) + u.troops;
+    let k = '', v = -1;
+    for (const x in c) if (c[x] > v) { v = c[x]; k = x; }
+    op._dt = k; op._dtT = g.time;
+    return k;
+  }
+  // 對手最強部隊戰力：有偵察就接近實際，否則只是模糊的估計
+  function knownPower(p, op) {
+    const real = bestTeamPower(op);
+    const sk = p.prof.skill;
+    return real * Math.exp(U.gauss() * (intelFresh(p, op) ? 0.08 : 0.55 * (1 - sk * 0.5)));
+  }
+  // 兵種剋制：有情報才會針對性出兵，且只有懂行的玩家會在意
+  function counterMult(p, team, op) {
+    if (p.prof.skill < 0.45 || !intelFresh(p, op) || typeof TROOP_COUNTER === 'undefined') return 1;
+    const et = domTroop(op);
+    const c = {};
+    for (const u of Game.teamUnits(p, team)) c[u.troop] = (c[u.troop] || 0) + u.troops;
+    let mt = '', v = -1;
+    for (const x in c) if (c[x] > v) { v = c[x]; mt = x; }
+    if (!et || !mt) return 1;
+    if (TROOP_COUNTER[mt] === et) return 1.12;
+    if (TROOP_COUNTER[et] === mt) return 0.88;
+    return 1;
+  }
+  // 斥候：技術不錯的玩家出手前會先派人探路，需要往返一段時間才有結果
+  function scoutGate(p, op, from) {
+    const m = mem(p);
+    if (p.prof.skill < 0.45 || intelFresh(p, op)) return false;
+    const sc = m.scout || (m.scout = {});
+    if (sc[op.id] === undefined) { sc[op.id] = G().time + World.dist(from, op.cityTile) * 1.5 + U.rint(5, 15); return true; }
+    if (G().time < sc[op.id]) return true;
+    delete sc[op.id];
+    (m.intel || (m.intel = {}))[op.id] = { t: G().time };
+    return false;
+  }
+  function truced(p, op) {
+    if (p.alliance < 0 || op.alliance < 0) return false;
+    const A = G().alliances[p.alliance];
+    return !!(A && A.truce && A.truce.with === op.alliance && A.truce.until > G().time);
+  }
+  function opRep(p, id) { const m = mem(p); return (m.opMem || (m.opMem = {}))[id] || ((m.opMem[id]) = { won: 0, hurt: 0 }); }
   function bestTeamPower(op) {
     const g = G();
     if (op._btpT !== undefined && g.time - op._btpT < 60) return op._btp;
@@ -1009,6 +1079,30 @@ var AI = (function () {
     Game.say(leader, 'world', '@' + u.name + ' ' + U.pick(['來我們〔' + a.name + '〕吧，就在你附近', '〔' + a.name + '〕誠邀主公加入，一起打城', '看你一個人開荒，要不要入〔' + a.name + '〕？', '兄弟入盟嗎？〔' + a.name + '〕缺人']));
     Game.notify(u.id, '〔' + a.name + '〕盟主 ' + leader.name + ' 邀請你加入同盟（點「同盟」查看）', 'good');
   }
+  // 外交：打不過就談和停戰一陣子；出現一家獨大時，其他同盟會聯手針對它
+  function diplomacy(a, leader) {
+    const g = G();
+    if (a.truce && a.truce.until <= g.time) a.truce = null;
+    if (g.time < (a.nextDiplo || 0)) return;
+    a.nextDiplo = g.time + U.rint(120, 360);
+    const en = a.enemy >= 0 ? g.alliances[a.enemy] : null;
+    if (en && !en.dead && !a.truce && en.power > a.power * 1.25 && U.chance(0.35 + leader.prof.skill * 0.2)) {
+      const until = g.time + U.rint(360, 720);
+      a.truce = { with: en.id, until }; en.truce = { with: a.id, until };
+      a.enemy = -1; if (en.enemy === a.id) en.enemy = -1;
+      Game.say(leader, 'world', '〔' + a.name + '〕願與〔' + en.name + '〕暫時停戰，各自休養');
+      return;
+    }
+    let top = null, second = null;
+    for (const b of g.alliances) {
+      if (b.dead || b.members.length < 5) continue;
+      if (!top || b.power > top.power) { second = top; top = b; } else if (!second || b.power > second.power) second = b;
+    }
+    if (top && second && top.id !== a.id && top.power > second.power * 1.4 && !sameBloc(a.id, top.id) && a.enemy !== top.id && !(a.truce && a.truce.with === top.id) && U.chance(0.3)) {
+      a.enemy = top.id;
+      Game.say(leader, 'world', '〔' + top.name + '〕一家獨大，各盟聯手壓制！');
+    }
+  }
   function alliancesThink(now) {
     const g = G();
     if (now !== undefined && now % 60 === 17) { feudTick(); raidTick(); }
@@ -1023,6 +1117,7 @@ var AI = (function () {
         const city = World.cities[a.target];
         if (city.alliance === a.id || sameBloc(city.alliance, a.id) || Game.cityLockedDay(city) > Game.day()) { a.target = -1; a.field = null; a.pave = null; }
       }
+      if (leader.ai) diplomacy(a, leader);
       if (a.target < 0 && leader.ai && a.members.length >= 3 && g.time >= (a.nextChoose || 0)) {
         chooseTarget(a);
         if (a.target < 0) a.nextChoose = g.time + 150; // 找不到目標時稍後再議
@@ -1313,6 +1408,8 @@ var AI = (function () {
   }
   function onLandLost(p, attacker, tile) {
     p.grudge[attacker.id] = G().time;
+    if (p.ai) opRep(p, attacker.id).hurt++;
+    if (attacker.ai) opRep(attacker, p.id).won++;
     raidEvent(attacker, p, 'land');
     if (!p.ai) return;
     const m = mem(p);
